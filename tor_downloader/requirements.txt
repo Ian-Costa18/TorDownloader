@@ -1,0 +1,8 @@
+requests[socks]
+tqdm
+stem
+validators
+selenium
+psutil
+colorama
+stemquests
