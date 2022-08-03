@@ -12,7 +12,7 @@ Gets the list of URLs to download either from a JSON file or from another URL (w
 TorDownloader can be easily installed through pip:
 - First, create a virtual environment: `python -m venv .venv`
 - Then activate it: `.venv\Scripts\activate` on Windows or `.venv/activate` on Linux
-- Finally install the tor_downloader package: `python -m pip install tor_downloader`
+- Finally install the tor_downloader package: `python -m pip install tor-downloader`
 
 If installing TorDownloader through pip, it will be installed in your Python path. This is important as the path is used for default options such as the output directory, input directory, and log directory.
 Because of this, you can give TorDownloader the argument `path` to find the folder TorDownloader was installed into.
@@ -42,4 +42,4 @@ Example command:
 
 ## Getting Results
 
-All files will be
+All files will be installed into the output directory specified in the config file or command line argument. By default, the output directory is `tor_downloader/data/input`.
