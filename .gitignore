@@ -9,6 +9,9 @@ geckodriver.*
 
 releases/
 
+# Reminds me how to upload to PyPi
+upload.md
+
 # LockBit download feature that is not implimented
 tor_downloader/LBDownloader.py
 

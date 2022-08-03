@@ -1,0 +1,34 @@
+[build-system]
+requires      = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "tor_downloader"
+version = "1.0.0"
+description = "Download dark web files using Tor."
+readme = "README.md"
+authors = [{ name = "Ian Costa", email = "costa.ian18@gmail.com" }]
+license = { file = "LICENSE" }
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python",
+    "Programming Language :: Python :: 3",
+]
+keywords = ["tor", "requests", "stem", "dark web", "file download"]
+dependencies = [
+    "requests[socks]",
+    "tqdm",
+    "psutil",
+    "validators",
+    "colorama",
+    "stemquests"
+]
+
+requires-python = ">=3.10"
+
+[project.optional-dependencies]
+dev = ["pylint", "autopep8", "isort", "pytest", "pip-tools", "build", "twine"]
+
+[project.urls]
+"Homepage" = "https://github.com/SammyTheBEAST/TorDownloader"
+"Bug Tracker" = "https://github.com/SammyTheBEAST/TorDownloader/issues"
