@@ -1,7 +1,4 @@
-"""Functions to grab download links from web pages and JSON files.
-
-Created by Ian Costa (ian.costa@ankura.com) in July 2022.
-"""
+"""Functions to grab download links from web pages and JSON files."""
 
 import json
 import logging

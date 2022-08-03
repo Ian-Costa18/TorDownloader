@@ -2,8 +2,6 @@
 
 Add the logging handler to a logger to write logged data to TQDM output.
 Add the formatter to format the logs to: "(%(asctime)s) [+/-/?/*/***] %(message)s"
-
-Created by Ian Costa (ian.costa@ankura.com) in July 2022.
 """
 
 import logging
