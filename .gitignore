@@ -8,12 +8,16 @@ geckodriver.*
 .vscode/
 
 releases/
+tor_downloader/data/input/*.json
+tor_downloader/data/output/*.json
 
 # Reminds me how to upload to PyPi
 upload.md
 
 # LockBit download feature that is not implimented
 tor_downloader/LBDownloader.py
+# Custom config
+config.json
 
 ### GitHub Generated Python ###
 

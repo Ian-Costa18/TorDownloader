@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "tor_downloader"
-version = "1.0.1"
+version = "1.0.2"
 description = "Download dark web files using Tor."
 readme = "README.md"
 authors = [{ name = "Ian Costa", email = "costa.ian18@gmail.com" }]

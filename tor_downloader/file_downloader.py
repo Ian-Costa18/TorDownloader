@@ -53,7 +53,7 @@ class FileDownloader(object):
         if use_tor:
             self.tor_instance = tor_instance or TorInstance(socks_port=tor_port)
             if requests_session is None:
-                self.requests_session, self.session_num = self.tor_instance.get_requests_session()
+                self.requests_session, self.session_num = self.tor_instance.get_session_with_number()
             else:
                 self.requests_session = requests_session
                 self.session_num = -1

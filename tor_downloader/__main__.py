@@ -11,11 +11,12 @@ The command line arguments must be formatted like so:
 Configuration options:
     socks_port: Port of Tor Socks5 proxy.
     max_downloads: Maximum number of downloads to run at once.
+    max_tor_checks: Number of times the Tor proxy will be checked to ensure Tor is working before crashing. Default is 5.
     tor_path: Path to the Tor executable (tor.exe). Often found in Tor Browser if installed (Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe).
     links_file: Path to the file containing the list of URLs to download. Must be a .json file with a single list of URLs.
     log_file: Path to the log file. Log file will be created if it does not exist.
     output_dir: Path to the directory to download the files to.
-    config_file: Path to the configuration file. Only usable through the command line arguments.
+    config: Path to the configuration file. Only usable through the command line arguments.
 
 Example command:
     ```python main.py max_downloads=7 tor_path=Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe links_file=links.json output_directory=output```
@@ -33,9 +34,8 @@ from typing import Dict
 
 from stemquests import TorConnectionError, TorInstance
 
-from tor_downloader.file_downloader import FileDownloader
-from tor_downloader.utils import (TDFormatter, TqdmLoggingHandler,
-                                  get_download_links_json)
+from .file_downloader import FileDownloader
+from .utils import TDFormatter, TqdmLoggingHandler, get_download_links_json
 
 CURRENT_PATH = Path(__file__).parent
 DEFAULT_CONFIG = {
@@ -71,10 +71,10 @@ def get_config_file(config_file: str) -> Dict:
                 continue
             # Convert the value to the correct type
             match key:
-                case "socks_port" | "max_downloads":
+                case "socks_port" | "max_downloads" | "max_tor_checks":
                     clean_config[key] = int(value)
                 case _:
-                    clean_config[key] = value
+                    clean_config[key] = value.lower()
     return clean_config
 
 def get_config_args() -> Dict:
@@ -95,9 +95,9 @@ def get_config_args() -> Dict:
         arg_key, arg_val = arg_split
         if arg_val.isnumeric():
             arg_val = int(arg_val)
-        if arg_val.lower() == "true":
+        elif arg_val.lower() == "true":
             arg_val = True
-        if arg_val.lower() == "false":
+        elif arg_val.lower() == "false":
             arg_val = False
         arg_dict[arg_key] = arg_val
 
@@ -112,7 +112,10 @@ def main():
             sys.exit(0)
     # Get the configuration options from the arguments and config file
     arg_config = get_config_args()
-    file_config = get_config_file(arg_config["config_file"]) if arg_config.get("config_file") is not None else DEFAULT_CONFIG
+    # Overwrite the default config with the config options from the file
+    file_config = {**DEFAULT_CONFIG, **get_config_file(arg_config["config"])} \
+                  if arg_config.get("config") is not None \
+                  else DEFAULT_CONFIG
 
     # Merge the config dictionaries, with the cmd arguments taking precedence
     CONFIG = {**file_config, **arg_config}
@@ -135,8 +138,10 @@ def main():
     tqdm_handler = TqdmLoggingHandler(logging.INFO)
     tqdm_handler.setFormatter(TDFormatter())
     td_logger.addHandler(tqdm_handler)
+    logger.addHandler(tqdm_handler)
 
     logger.info("Starting TorDownloader on %s", datetime.now().isoformat())
+    logger.debug("Using config options: %s", str(CONFIG))
 
     download_links = get_download_links_json(CONFIG.get("links_file"))
     if download_links is None:
@@ -149,11 +154,14 @@ def main():
     with ThreadPoolExecutor(max_workers=CONFIG["max_downloads"]) as executor:
         try: # Catch keyboard interrupts and other exceptions
             # Submit the jobs to the executor.
+            logger.info("Submitting %d jobs to the executor.", len(download_links))
             futures = {}
             for download_link in download_links:
                 downloader = FileDownloader(tor_instance=tor_instance, tor_port=CONFIG["socks_port"])
                 future = executor.submit(downloader.download_file, download_link, target_dir=CONFIG["output_dir"])
                 futures[future] = download_link
+                logger.info("Submitted job for URL '%s' using session #%d.", download_link, downloader.session_num) # TODO: Session number needs to be 1 less
+            logger.info("Submitted %d jobs to the executor.", len(futures))
             # Get the results for the downloads
             for future in as_completed(futures):
                 url = futures[future]
@@ -167,26 +175,29 @@ def main():
                     continue
                 if future_exception is not None:
                     files[url] = future.exception()
-                    td_logger.error("Error downloading %s: %s", url, future.exception())
+                    logger.error("Error downloading %s: %s", url, future.exception())
                     continue
                 if CONFIG["output_dir"] in (result := future.result()):
-                    td_logger.info("Download finished! Filepath: %s | URL: %s", result, url)
+                    logger.info("Download finished! Filepath: %s | URL: %s", result, url)
                 else:
-                    td_logger.error("Download failed! Reason: %s | URL: %s", result, url)
+                    logger.error("Download failed! Reason: %s | URL: %s", result, url)
                 files[url] = result
+                logger.info("%d files finished so far.", len(files))
+        except ConnectionError:
+            logger.error("Connection error, restarting script...")
+            return main()
         except KeyboardInterrupt:
             # TODO: Fix this, it doesn't work. For now manually kill the program.
-            print('Keyboard Interrupt')
             logger.info("Keyboard Interrupt, stopping program...")
             sys.exit(1)
         except Exception as err:
-            logger.error("Fatal Error (time = %s): %s", datetime.now().isoformat(), err)
-            raise err
+            logger.error("Fatal Error, restarting script... Error: %s", err)
+            return main()
 
-    print("-"*25)
-    print("All Downloads Finished:")
+    logger.info("-"*25)
+    logger.info("All Downloads Finished:")
     for url, result in files.items():
-        print(f"\t- {url}: {result}")
+        logger.info("\t- %s: %s", url, result)
 
 if __name__ == '__main__':
     main()
