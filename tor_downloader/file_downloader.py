@@ -153,13 +153,14 @@ class FileDownloader(object):
         logger.debug("Starting download from URL: %s", url)
 
         # Check if the target_dir is a valid directory
-        if target_dir and not os.path.isdir(target_dir):
-            if os.path.isfile(target_dir):
+        target_path = Path(target_dir)
+        if target_dir and not target_path.is_dir():
+            if target_path.is_file():
                 raise ValueError(f'Invalid target_dir={target_dir} specified, target_dir is a file.')
             try:
                 # Create the target_dir if it doesn't exist
                 logger.warning("Directory '%s' does not exist, attempting to create it.", target_dir)
-                os.mkdirs(target_dir)
+                target_path.mkdir(parents=True, exist_ok=True)
                 logger.info("Directory '%s' successfully created.", target_dir)
             except OSError as err:
                 logger.error("Error creating target_dir: %s", err)

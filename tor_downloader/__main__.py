@@ -121,6 +121,7 @@ def main():
     CONFIG = {**file_config, **arg_config}
 
     # Add a new line to the end of the log file before starting
+    Path(CONFIG["log_file"]).parents[0].mkdir(parents=True, exist_ok=True) # Make the parent directories first
     with open(CONFIG["log_file"], "a", encoding="utf-8") as log_file:
         log_file.write("\n")
     # Setup logging
@@ -177,7 +178,7 @@ def main():
                     files[url] = future.exception()
                     logger.error("Error downloading %s: %s", url, future.exception())
                     continue
-                if CONFIG["output_dir"] in (result := future.result()):
+                if str(CONFIG["output_dir"]) in (result := future.result()):
                     logger.info("Download finished! Filepath: %s | URL: %s", result, url)
                 else:
                     logger.error("Download failed! Reason: %s | URL: %s", result, url)
