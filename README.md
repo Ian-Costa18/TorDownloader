@@ -11,9 +11,9 @@ Gets the list of URLs to download either from a JSON file or from another URL (w
 
 TorDownloader can be easily installed through pip:
 
-- First, create a virtual environment: `python -m venv .venv`
-- Then activate it: `.venv\Scripts\activate` on Windows or `.venv/activate` on Linux
-- Finally install the tor_downloader package: `python -m pip install tor-downloader`
+* First, create a virtual environment: `python -m venv .venv`
+* Then activate it: `.venv\Scripts\activate` on Windows or `.venv/activate` on Linux
+* Finally install the tor_downloader package: `python -m pip install tor-downloader`
 
 If installing TorDownloader through pip, it will be installed in your Python path. This is important as the path is used for default options such as the output directory, input directory, and log directory.
 Because of this, you can give TorDownloader the argument `path` to find the folder TorDownloader was installed into.
@@ -30,14 +30,15 @@ The command line arguments must be formatted like so:
     ```CONFIG=SETTING```
 
 Configuration options:
-    socks_port: Port of Tor Socks5 proxy.
-    max_downloads: Maximum number of downloads to run at once.
-    max_tor_checks: Number of times the Tor proxy will be checked to ensure Tor is working before crashing. Default is 5.
-    tor_path: Path to the Tor executable (tor.exe). Often found in Tor Browser if installed (Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe).
-    links_file: Path to the file containing the list of URLs to download. Must be a .json file with a single list of URLs.
-    log_file: Path to the log file. Log file will be created if it does not exist.
-    output_dir: Path to the directory to download the files to.
-    config: Path to the configuration file. Only usable through the command line arguments.
+
+* socks_port: Port of Tor Socks5 proxy.
+* max_downloads: Maximum number of downloads to run at once.
+* max_tor_checks: Number of times the Tor proxy will be checked to ensure Tor is working before crashing. Default is 5.
+* tor_path: Path to the Tor executable (tor.exe). Often found in Tor Browser if installed (Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe).
+* links_file: Path to the file containing the list of URLs to download. Must be a .json file with a single list of URLs.
+* log_file: Path to the log file. Log file will be created if it does not exist.
+* output_dir: Path to the directory to download the files to.
+* config: Path to the configuration file. Only usable through the command line arguments.
 
 Example command:
     ```python -m tor_downloader max_downloads=7 tor_path="Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe" links_file=links.json output_directory=output```
