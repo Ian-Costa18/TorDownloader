@@ -152,7 +152,7 @@ def get_download_links_web(
 def enumerate_all_files(
     start_url: str,
     session: requests.Session,
-    allowed_exts=None,
+    disallowed_exts=None,
     visited: Optional[Set[str]] = None,
     max_workers=8,
     request_timeout: Tuple[int, int] = (30, 120),
@@ -164,7 +164,7 @@ def enumerate_all_files(
         for file_url, _relative_dir in stream_directory_files(
             start_url,
             session,
-            allowed_exts=allowed_exts,
+            disallowed_exts=disallowed_exts,
             visited=visited,
             request_timeout=request_timeout,
             probe_retries=probe_retries,
@@ -194,7 +194,7 @@ def _relative_dir_from_root(start_url: str, current_dir_url: str) -> str:
 def stream_directory_files(
     start_url: str,
     session: requests.Session,
-    allowed_exts=None,
+    disallowed_exts=None,
     visited: Optional[Set[str]] = None,
     request_timeout: Tuple[int, int] = (30, 120),
     probe_retries: int = 3,
@@ -204,32 +204,16 @@ def stream_directory_files(
     Yields:
         Iterator[Tuple[str, str]]: (file_url, relative_dir_from_start_url)
     """
-    if allowed_exts is None:
-        allowed_exts = (
-            ".zip",
-            ".7z",
-            ".rar",
-            ".tar",
-            ".gz",
-            ".xz",
-            ".bz2",
-            ".txt",
-            ".csv",
-            ".json",
-            ".pdf",
-            ".doc",
-            ".docx",
-            ".xls",
-            ".xlsx",
-            ".jpg",
-            ".jpeg",
-            ".png",
-            ".gif",
-            ".mp4",
-            ".mp3",
-            ".bin",
-            ".exe",
-            ".iso",
+    if disallowed_exts is None:
+        # Avoid downloading obvious website/runtime assets.
+        disallowed_exts = (
+            ".html",
+            ".htm",
+            ".css",
+            ".js",
+            ".mjs",
+            ".ico",
+            ".svg",
         )
     visited_set: Set[str] = set() if visited is None else visited
     start_dir_url = _normalize_dir_url(start_url)
@@ -270,7 +254,7 @@ def stream_directory_files(
                         pbar.refresh()
                     continue
 
-                if abs_url.lower().endswith(allowed_exts):
+                if not abs_url.lower().endswith(disallowed_exts):
                     yield abs_url, relative_dir
 
             pbar.update(1)

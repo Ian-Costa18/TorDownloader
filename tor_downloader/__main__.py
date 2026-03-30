@@ -11,6 +11,8 @@ The command line arguments must be formatted like so:
 Configuration options:
     socks_port: Port of Tor Socks5 proxy.
     max_downloads: Maximum number of downloads to run at once.
+    request_connect_timeout: Per-request connect timeout in seconds. Default is 60.
+    request_read_timeout: Per-request read timeout in seconds. Default is 300.
     max_tor_checks: Number of times the Tor proxy will be checked to ensure Tor is working before crashing. Default is 5.
     tor_path: Path to the Tor executable (tor.exe). Often found in Tor Browser if installed (Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe).
     links_file: Path to the file containing the list of URLs to download. Must be a .json file with a single list of URLs.
@@ -47,9 +49,10 @@ from .utils import (
 CURRENT_PATH = Path(__file__).parent
 DEFAULT_CONFIG = {
     "socks_port": 9051,
-    "max_downloads": 7,
-    "request_connect_timeout": 30,
-    "request_read_timeout": 120,
+    # "max_downloads": 7,
+    "max_downloads": 1,  # Set to 1 for testing
+    "request_connect_timeout": 60,
+    "request_read_timeout": 300,
     "probe_retries": 3,
     "links_file": CURRENT_PATH / "data/input/links.json",
     "log_file": CURRENT_PATH / "log/TorDownloader.log",
@@ -167,10 +170,8 @@ def main():
     logger.addHandler(handler)
 
     # Set up Tor Downloader logger
-    td_logger = logging.getLogger("tor_downloader")
     tqdm_handler = TqdmLoggingHandler(logging.INFO)
     tqdm_handler.setFormatter(TDFormatter())
-    td_logger.addHandler(tqdm_handler)
     logger.addHandler(tqdm_handler)
 
     logger.info("Starting TorDownloader on %s", datetime.now().isoformat())
@@ -192,8 +193,8 @@ def main():
     )
     files = {}
     request_timeout = (
-        int(CONFIG.get("request_connect_timeout", 30)),
-        int(CONFIG.get("request_read_timeout", 120)),
+        int(CONFIG.get("request_connect_timeout", 60)),
+        int(CONFIG.get("request_read_timeout", 300)),
     )
     probe_retries = max(1, int(CONFIG.get("probe_retries", 3)))
 
@@ -208,11 +209,13 @@ def main():
 
     with ThreadPoolExecutor(max_workers=CONFIG["max_downloads"]) as executor:
         try:
-            logger.info("Submitting %d jobs to the executor.", len(download_links))
+            logger.info("Submitting %d job(s) to the executor.", len(download_links))
             futures = {}
             for download_link in download_links:
                 downloader = FileDownloader(
-                    tor_instance=tor_instance, tor_port=CONFIG["socks_port"]
+                    tor_instance=tor_instance,
+                    tor_port=CONFIG["socks_port"],
+                    request_timeout=request_timeout,
                 )
                 # Detect if the link is a directory (HTML) or file.
                 content_type = detect_content_type(

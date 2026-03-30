@@ -33,6 +33,8 @@ Configuration options:
 
 * socks_port: Port of Tor Socks5 proxy.
 * max_downloads: Maximum number of downloads to run at once.
+* request_connect_timeout: Per-request connect timeout in seconds. Default is 60.
+* request_read_timeout: Per-request read timeout in seconds. Default is 300.
 * max_tor_checks: Number of times the Tor proxy will be checked to ensure Tor is working before crashing. Default is 5.
 * tor_path: Path to the Tor executable (tor.exe). Often found in Tor Browser if installed (Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe).
 * links_file: Path to the file containing the list of URLs to download. Must be a .json file with a single list of URLs.

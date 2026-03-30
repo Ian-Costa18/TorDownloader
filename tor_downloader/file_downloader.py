@@ -10,7 +10,7 @@ import os
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, Optional, Tuple
 
 import requests
 import validators
@@ -45,15 +45,24 @@ class FileDownloader(object):
         tor_instance.TorConnectionError: If there is an error connecting to Tor.
     """
 
-    def __init__(self, tor_instance: TorInstance=None, tor_port: int=9051,
-                 use_tor: bool=True, requests_session: requests.Session=None, max_retries: int=5) -> None:
+    def __init__(
+        self,
+        tor_instance: Optional[TorInstance] = None,
+        tor_port: int = 9051,
+        use_tor: bool = True,
+        requests_session: Optional[requests.Session] = None,
+        max_retries: int = 5,
+        request_timeout: Tuple[int, int] = (30, 120),
+    ) -> None:
         if not use_tor and tor_instance is not None:
             raise ValueError("use_tor cannot be false if tor_instance is provided.")
 
         if use_tor:
             self.tor_instance = tor_instance or TorInstance(socks_port=tor_port)
             if requests_session is None:
-                self.requests_session, self.session_num = self.tor_instance.get_session_with_number()
+                self.requests_session, self.session_num = (
+                    self.tor_instance.get_session_with_number()
+                )
             else:
                 self.requests_session = requests_session
                 self.session_num = -1
@@ -65,6 +74,7 @@ class FileDownloader(object):
 
         self.max_retries = max_retries
         self.num_retries = 0
+        self.request_timeout = request_timeout
 
     def _get_url_filename(self, url: str, session: requests.Session) -> str:
         """
@@ -87,13 +97,21 @@ class FileDownloader(object):
         try:
             if not validators.url(url):
                 logger.error("Invalid URL: %s", url)
-                raise LinkError('Invalid url')
+                raise LinkError("Invalid url")
             filename = os.path.basename(url)
             _, ext = os.path.splitext(filename)
             if ext:
                 return filename
-            header = session.head(url, allow_redirects=False).headers
-            return os.path.basename(header.get('Location')) if 'Location' in header else filename
+            header = session.head(
+                url,
+                allow_redirects=False,
+                timeout=self.request_timeout,
+            ).headers
+            return (
+                os.path.basename(header.get("Location"))
+                if "Location" in header
+                else filename
+            )
         except requests.exceptions.HTTPError as errh:
             logger.error("Http Error: %s | URL: %s", errh, url)
             raise errh
@@ -107,7 +125,9 @@ class FileDownloader(object):
             logger.error("Oops, Something Else: %s | URL: %s", err, url)
             raise err
 
-    def _check_local_file(self, filename: str, chunk_size: int, full_path: str, header: Dict=None) -> Tuple[Dict, int]:
+    def _check_local_file(
+        self, filename: str, chunk_size: int, full_path: str, header: Dict = None
+    ) -> Tuple[Dict, int]:
         """Check if filename already exists, get the file size if it does and create a header to resume download.
 
         Args:
@@ -123,13 +143,23 @@ class FileDownloader(object):
         header = {} if header is None else header
         if os.path.isfile(full_path):
             original_file_size = Path(full_path).stat().st_size
-            header['Range'] = f'bytes= {original_file_size}-'
+            header["Range"] = f"bytes= {original_file_size}-"
             original_file_chunks = original_file_size // chunk_size
-            logger.info("Found file '%s' in output directory, resuming download after %d chunks", filename, original_file_chunks)
+            logger.info(
+                "Found file '%s' in output directory, resuming download after %d chunks",
+                filename,
+                original_file_chunks,
+            )
             return header, original_file_chunks
         return header, 0
 
-    def download_file(self, url: str, target_dir: str=None, filename: str=None, chunk_size: int=1024) -> str:
+    def download_file(
+        self,
+        url: str,
+        target_dir: str = None,
+        filename: str = None,
+        chunk_size: int = 1024,
+    ) -> str:
         """Stream downloads files via HTTP
 
         Args:
@@ -146,7 +176,9 @@ class FileDownloader(object):
         """
         # Check if number of retries is less than max retries
         if self.num_retries >= self.max_retries:
-            logger.error("Max retries (#%d) exceeded for URL: %s", self.num_retries, url)
+            logger.error(
+                "Max retries (#%d) exceeded for URL: %s", self.num_retries, url
+            )
             return None
         self.num_retries += 1
 
@@ -156,82 +188,156 @@ class FileDownloader(object):
         target_path = Path(target_dir)
         if target_dir and not target_path.is_dir():
             if target_path.is_file():
-                raise ValueError(f'Invalid target_dir={target_dir} specified, target_dir is a file.')
+                raise ValueError(
+                    f"Invalid target_dir={target_dir} specified, target_dir is a file."
+                )
             try:
                 # Create the target_dir if it doesn't exist
-                logger.warning("Directory '%s' does not exist, attempting to create it.", target_dir)
+                logger.warning(
+                    "Directory '%s' does not exist, attempting to create it.",
+                    target_dir,
+                )
                 target_path.mkdir(parents=True, exist_ok=True)
                 logger.info("Directory '%s' successfully created.", target_dir)
             except OSError as err:
                 logger.error("Error creating target_dir: %s", err)
-                raise ValueError(f'Invalid target_dir={target_dir} specified') from err
+                raise ValueError(f"Invalid target_dir={target_dir} specified") from err
 
         # Get filename from URL if not given
-        filename = self._get_url_filename(url, self.requests_session) if filename is None else filename
+        filename = (
+            self._get_url_filename(url, self.requests_session)
+            if filename is None
+            else filename
+        )
         # Get the target_dir and base_path if target_dir is not given
-        full_path, base_path = os.path.join(target_dir, filename), os.path.abspath(os.path.dirname(__file__))
+        full_path, base_path = (
+            os.path.join(target_dir, filename),
+            os.path.abspath(os.path.dirname(__file__)),
+        )
         # Get the path to the file to download
-        target_dest_dir = os.path.join(target_dir, filename) if target_dir else os.path.join(base_path, filename)
+        target_dest_dir = (
+            os.path.join(target_dir, filename)
+            if target_dir
+            else os.path.join(base_path, filename)
+        )
 
         # Check if file already exists, get the file size if it does and resume the download at the end of the file
-        resume_header, original_file_chunks = self._check_local_file(filename, chunk_size, full_path)
+        resume_header, original_file_chunks = self._check_local_file(
+            filename, chunk_size, full_path
+        )
         try:
-            req = self.requests_session.get(url, headers=resume_header, stream=True, verify=False)
+            req = self.requests_session.get(
+                url,
+                headers=resume_header,
+                stream=True,
+                verify=False,
+                timeout=self.request_timeout,
+            )
             # Does the entire file need to be restarted? What if the local file's size is slightly higher than the recieved file size?
             if req.status_code == 404:
                 logger.error("Recieved 404, recheck download links. 404 link: %s", url)
                 raise LinkError(f"404 for URL: {url}")
             if req.status_code == 416:
-                logger.info("Received 416 response, assuming download is done for file: %s", filename)
+                logger.info(
+                    "Received 416 response, assuming download is done for file: %s",
+                    filename,
+                )
                 return target_dest_dir
-            if (file_size := req.headers.get('Content-Length')) is None:
-                raise LinkError(f"Content-Length for URL is none. URL: {url} | Request: {req}")
-        except (requests.exceptions.HTTPError, requests.exceptions.ConnectionError,
-                requests.exceptions.Timeout, requests.exceptions.RequestException) as err:
+            if (file_size := req.headers.get("Content-Length")) is None:
+                raise LinkError(
+                    f"Content-Length for URL is none. URL: {url} | Request: {req}"
+                )
+        except (
+            requests.exceptions.HTTPError,
+            requests.exceptions.ConnectionError,
+            requests.exceptions.Timeout,
+            requests.exceptions.RequestException,
+        ) as err:
             logger.warning("Request error, trying again. URL: %s | Error: %s", url, err)
-            return self.download_file(url, target_dir=target_dir, filename=filename, chunk_size=chunk_size)
+            return self.download_file(
+                url, target_dir=target_dir, filename=filename, chunk_size=chunk_size
+            )
         num_bars = int(file_size) // chunk_size
 
         logger.debug("Got request: %s | Number of chunks: %d", req, num_bars)
         # Set up TQDM options we will use for every progress bar
         tqdm_options = {
-            "unit": 'KB',
+            "unit": "KB",
             "desc": filename,
             "leave": True,
             "file": sys.stdout,
-            "dynamic_ncols": True
+            "dynamic_ncols": True,
         }
         # TODO: BUG: The progress bar does not show the first time a file is downloaded.
         # If the file size is less then a chunk, download it and append to file
         if int(file_size) < chunk_size:
-            with open(target_dest_dir, 'ab') as output_file:
+            with open(target_dest_dir, "ab") as output_file:
                 output_file.write(req.content)
-            logger.info("Last bytes have been downloaded (%s bytes)!  URL: %s | Filepath: %s", file_size, url, target_dest_dir)
+            logger.info(
+                "Last bytes have been downloaded (%s bytes)!  URL: %s | Filepath: %s",
+                file_size,
+                url,
+                target_dest_dir,
+            )
             return target_dest_dir
         # If the file size is 0, there is nothing to download
         if file_size == 0:
-            logger.info("No more bytes left to download!  URL: %s | Filepath: %s", url, target_dest_dir)
+            logger.info(
+                "No more bytes left to download!  URL: %s | Filepath: %s",
+                url,
+                target_dest_dir,
+            )
             return target_dest_dir
         # If the file is not in the output directory, create it and start a stream download
         if not resume_header:
-            logger.info("File not found in output directory, creating new file: %s", target_dest_dir)
-            with open(target_dest_dir, 'wb') as output_file:
-                for chunk in tqdm(req.iter_content(chunk_size=chunk_size), total=num_bars, **tqdm_options):
+            logger.info(
+                "File not found in output directory, creating new file: %s",
+                target_dest_dir,
+            )
+            with open(target_dest_dir, "wb") as output_file:
+                for chunk in tqdm(
+                    req.iter_content(chunk_size=chunk_size),
+                    total=num_bars,
+                    **tqdm_options,
+                ):
                     output_file.write(chunk)
         # If the file is in the output directory, start a stream download and append to file
         else:
-            logger.info("File found in output directory, resuming download of file: %s", target_dest_dir)
-            with open(target_dest_dir, 'ab') as output_file:
-                for chunk in tqdm(req.iter_content(chunk_size=chunk_size), total=num_bars+original_file_chunks,
-                                  initial=original_file_chunks, **tqdm_options):
+            logger.info(
+                "File found in output directory, resuming download of file: %s",
+                target_dest_dir,
+            )
+            with open(target_dest_dir, "ab") as output_file:
+                for chunk in tqdm(
+                    req.iter_content(chunk_size=chunk_size),
+                    total=num_bars + original_file_chunks,
+                    initial=original_file_chunks,
+                    **tqdm_options,
+                ):
                     output_file.write(chunk)
         # Check if the file size is the same as the expected file size.
         # TODO: Check this, expected file size may not be the same as the full file size since we can start halfway through
         target_file_size = Path(target_dest_dir).stat().st_size
-        logger.debug("Finalizing file: URL: %s | File size: %s | Expected file size: %s | Difference: %d",
-                     url, target_file_size, file_size, target_file_size - int(file_size))
+        logger.debug(
+            "Finalizing file: URL: %s | File size: %s | Expected file size: %s | Difference: %d",
+            url,
+            target_file_size,
+            file_size,
+            target_file_size - int(file_size),
+        )
         if target_file_size != int(file_size):
-            logger.warning("Target file size (%d) does not match expected file size (%d), restarting...", target_file_size, int(file_size))
-            return self.download_file(url, target_dir=target_dir, filename=filename, chunk_size=chunk_size)
-        logger.info("File downloaded! Elapsed Time: %s | URL: %s | Filepath: %s", str(self.start_time - datetime.now()), url, target_dest_dir)
+            logger.warning(
+                "Target file size (%d) does not match expected file size (%d), restarting...",
+                target_file_size,
+                int(file_size),
+            )
+            return self.download_file(
+                url, target_dir=target_dir, filename=filename, chunk_size=chunk_size
+            )
+        logger.info(
+            "File downloaded! Elapsed Time: %s | URL: %s | Filepath: %s",
+            str(self.start_time - datetime.now()),
+            url,
+            target_dest_dir,
+        )
         return target_dest_dir
