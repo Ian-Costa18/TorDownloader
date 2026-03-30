@@ -11,11 +11,13 @@ The command line arguments must be formatted like so:
 Configuration options:
     socks_port: Port of Tor Socks5 proxy.
     max_downloads: Maximum number of downloads to run at once.
+    enum_workers: Number of concurrent directory enumeration workers. Defaults to max_downloads.
+    download_workers: Number of concurrent file download workers. Defaults to max_downloads.
     request_connect_timeout: Per-request connect timeout in seconds. Default is 60.
     request_read_timeout: Per-request read timeout in seconds. Default is 300.
     max_tor_checks: Number of times the Tor proxy will be checked to ensure Tor is working before crashing. Default is 5.
     tor_path: Path to the Tor executable (tor.exe). Often found in Tor Browser if installed (Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe).
-    links_file: Path to the file containing the list of URLs to download. Must be a .json file with a single list of URLs.
+    links_file: Path to links.json containing either a list of URLs or a mirror schema with {bases, files}.
     log_file: Path to the log file. Log file will be created if it does not exist.
     output_dir: Path to the directory to download the files to.
     config: Path to the configuration file. Only usable through the command line arguments.
@@ -28,29 +30,25 @@ Example command:
 import json
 import logging
 import sys
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Dict
-from urllib.parse import unquote, urlparse
 
-from stemquests import TorConnectionError, TorInstance
+from stemquests import TorInstance
 
-from .file_downloader import FileDownloader
-from .utils import (
-    TDFormatter,
-    TqdmLoggingHandler,
-    detect_content_type,
-    get_download_links_json,
-    stream_directory_files,
-)
+from .download_runner import run_download_jobs
+from .link_specs import load_links_spec
+from .mirror_planner import plan_download_jobs
+from .utils import TDFormatter, TqdmLoggingHandler
 
 CURRENT_PATH = Path(__file__).parent
 DEFAULT_CONFIG = {
     "socks_port": 9051,
-    # "max_downloads": 7,
-    "max_downloads": 1,  # Set to 1 for testing
+    "max_downloads": 10,
+    "enum_workers": 12,
+    "download_workers": 4,
+    # "max_downloads": 1,  # Set to 1 for testing
     "request_connect_timeout": 60,
     "request_read_timeout": 300,
     "probe_retries": 3,
@@ -88,6 +86,8 @@ def get_config_file(config_file: str) -> Dict:
                 case (
                     "socks_port"
                     | "max_downloads"
+                    | "enum_workers"
+                    | "download_workers"
                     | "max_tor_checks"
                     | "request_connect_timeout"
                     | "request_read_timeout"
@@ -178,9 +178,10 @@ def main():
     logger.debug("Using config options: %s", str(CONFIG))
 
     links_file = str(CONFIG.get("links_file", DEFAULT_CONFIG["links_file"]))
-    download_links = get_download_links_json(links_file)
-    if len(download_links) == 0:
-        logger.error("Links file is empty.")
+    try:
+        links_spec = load_links_spec(links_file)
+    except (ValueError, OSError, json.JSONDecodeError) as err:
+        logger.error("Could not load links file '%s': %s", links_file, err)
         return
 
     # Create a Tor instance for the downloader
@@ -191,149 +192,65 @@ def main():
         if tor_path is not None
         else TorInstance(socks_port)
     )
-    files = {}
     request_timeout = (
         int(CONFIG.get("request_connect_timeout", 60)),
         int(CONFIG.get("request_read_timeout", 300)),
     )
     probe_retries = max(1, int(CONFIG.get("probe_retries", 3)))
+    max_downloads = max(1, int(CONFIG.get("max_downloads", 4)))
+    if max_downloads != int(CONFIG.get("max_downloads", 4)):
+        logger.warning("max_downloads must be >= 1. Using %d.", max_downloads)
 
-    def _safe_url_segments(url: str, keep_filename: bool) -> Path:
-        """Create local path segments from URL netloc/path."""
-        parsed = urlparse(url)
-        host = parsed.netloc.replace(":", "_") or "unknown_host"
-        parts = [part for part in unquote(parsed.path).split("/") if part]
-        if not keep_filename and parts:
-            parts = parts[:-1]
-        return Path(host, *parts)
+    enum_workers_cfg = CONFIG.get("enum_workers")
+    enum_workers = (
+        max(1, int(enum_workers_cfg)) if enum_workers_cfg is not None else max_downloads
+    )
+    if enum_workers_cfg is not None and enum_workers != int(enum_workers_cfg):
+        logger.warning("enum_workers must be >= 1. Using %d.", enum_workers)
 
-    with ThreadPoolExecutor(max_workers=CONFIG["max_downloads"]) as executor:
-        try:
-            logger.info("Submitting %d job(s) to the executor.", len(download_links))
-            futures = {}
-            for download_link in download_links:
-                downloader = FileDownloader(
-                    tor_instance=tor_instance,
-                    tor_port=CONFIG["socks_port"],
-                    request_timeout=request_timeout,
-                )
-                # Detect if the link is a directory (HTML) or file.
-                content_type = detect_content_type(
-                    downloader.requests_session,
-                    download_link,
-                    request_timeout=request_timeout,
-                    probe_retries=probe_retries,
-                )
-                if content_type == "":
-                    logger.warning(
-                        "Could not probe content type for '%s', submitting as direct file URL.",
-                        download_link,
-                    )
-                # If it's HTML, treat as directory and extract links
-                if "text/html" in content_type:
-                    logger.info(
-                        f"Detected directory (HTML) at {download_link}, recursively extracting all file links."
-                    )
+    download_workers_cfg = CONFIG.get("download_workers")
+    download_workers = (
+        max(1, int(download_workers_cfg))
+        if download_workers_cfg is not None
+        else max_downloads
+    )
+    if download_workers_cfg is not None and download_workers != int(
+        download_workers_cfg
+    ):
+        logger.warning("download_workers must be >= 1. Using %d.", download_workers)
 
-                    directory_root = Path(CONFIG["output_dir"]) / _safe_url_segments(
-                        download_link, keep_filename=True
-                    )
-                    submitted_count = 0
-                    for file_url, relative_dir in stream_directory_files(
-                        download_link,
-                        downloader.requests_session,
-                        request_timeout=request_timeout,
-                        probe_retries=probe_retries,
-                    ):
-                        target_dir = (
-                            directory_root / relative_dir
-                            if relative_dir
-                            else directory_root
-                        )
-                        future = executor.submit(
-                            downloader.download_file,
-                            file_url,
-                            target_dir=str(target_dir),
-                        )
-                        futures[future] = (file_url, str(target_dir))
-                        submitted_count += 1
-                        logger.info(
-                            "Submitted job for file URL '%s' from directory '%s' to '%s' using session #%d.",
-                            file_url,
-                            download_link,
-                            target_dir,
-                            downloader.session_num,
-                        )
-                    logger.info(
-                        "Finished streaming enumeration for directory '%s'. Submitted %d file jobs.",
-                        download_link,
-                        submitted_count,
-                    )
-                else:
-                    # Treat as file
-                    target_dir = Path(CONFIG["output_dir"]) / _safe_url_segments(
-                        download_link, keep_filename=False
-                    )
-                    future = executor.submit(
-                        downloader.download_file,
-                        download_link,
-                        target_dir=str(target_dir),
-                    )
-                    futures[future] = (download_link, str(target_dir))
-                    logger.info(
-                        "Submitted job for URL '%s' to '%s' using session #%d.",
-                        download_link,
-                        target_dir,
-                        downloader.session_num,
-                    )
-            logger.info("Submitted %d jobs to the executor.", len(futures))
-            while futures:
-                for future in as_completed(list(futures.keys())):
-                    url, target_dir = futures.pop(future)
-                    future_exception = future.exception()
-                    if isinstance(future_exception, TorConnectionError):
-                        logger.error(
-                            "Could not connect to Tor for URL '%s', readding the URL to the queue.",
-                            url,
-                        )
-                        downloader = FileDownloader(
-                            tor_instance=tor_instance, tor_port=CONFIG["socks_port"]
-                        )
-                        retry_url_future = executor.submit(
-                            downloader.download_file, url, target_dir=target_dir
-                        )
-                        futures[retry_url_future] = (url, target_dir)
-                        continue
-                    if future_exception is not None:
-                        files[url] = future.exception()
-                        logger.error(
-                            "Error downloading %s: %s", url, future.exception()
-                        )
-                        continue
-                    if str(CONFIG["output_dir"]) in (result := future.result()):
-                        logger.info(
-                            "Download finished! Filepath: %s | URL: %s", result, url
-                        )
-                    else:
-                        logger.error(
-                            "Download failed! Reason: %s | URL: %s", result, url
-                        )
-                    files[url] = result
-                    logger.info("%d files finished so far.", len(files))
-        except ConnectionError:
-            logger.error("Connection error, restarting script...")
-            return main()
-        except KeyboardInterrupt:
-            logger.info("Keyboard Interrupt, stopping program...")
-            sys.exit(1)
-        except Exception as err:
-            logger.error("Fatal Error, restarting script... Error: %s", err)
-            return main()
+    try:
+        jobs = plan_download_jobs(links_spec)
+        if len(jobs) == 0:
+            logger.error("Links file is empty.")
+            return
+
+        logger.info("Planned %d logical job(s).", len(jobs))
+        files = run_download_jobs(
+            jobs=jobs,
+            output_dir=str(CONFIG["output_dir"]),
+            tor_instance=tor_instance,
+            tor_port=CONFIG["socks_port"],
+            max_downloads=max_downloads,
+            request_timeout=request_timeout,
+            probe_retries=probe_retries,
+            enum_workers=enum_workers,
+            download_workers=download_workers,
+        )
+    except ConnectionError:
+        logger.error("Connection error, restarting script...")
+        return main()
+    except KeyboardInterrupt:
+        logger.info("Keyboard Interrupt, stopping program...")
+        sys.exit(1)
+    except Exception as err:
+        logger.error("Fatal Error, restarting script... Error: %s", err)
+        return main()
 
     logger.info("-" * 25)
     logger.info("All Downloads Finished:")
-    for url, result in files.items():
-        logger.info("\t- %s: %s", url, result)
+    for relative_target, result in files.items():
+        logger.info("\t- %s: %s", relative_target, result)
 
 
 if __name__ == "__main__":
