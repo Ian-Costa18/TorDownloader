@@ -8,8 +8,8 @@ geckodriver.*
 .vscode/
 
 releases/
-tor_downloader/data/input/*.json
-tor_downloader/data/output/*.json
+tor_downloader/data/input/**
+tor_downloader/data/output/**
 
 # Reminds me how to upload to PyPi
 upload.md
