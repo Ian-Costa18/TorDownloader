@@ -14,18 +14,18 @@ import requests
 from stemquests import TorConnectionError, TorInstance
 from tqdm import tqdm
 
-from .config_utils import min_int
 from .file_downloader import FileDownloader
 from .link_discovery import list_directory_entries
 from .mirror_planner import DownloadJob
-from .output_layout import (
+from .progress_store import SQLiteProgressStore
+from .utils.config_utils import min_int
+from .utils.output_layout import (
     dedupe_preserve_order,
     filename_from_url,
     get_target_dir,
     normalize_relative_path,
 )
-from .progress_store import SQLiteProgressStore
-from .url_utils import ensure_trailing_slash
+from .utils.url_utils import ensure_trailing_slash
 
 logger = logging.getLogger(__name__)
 _THREAD_LOCAL = threading.local()

@@ -1,6 +1,7 @@
 ### Custom ###
 
 *.log
+tor_downloader/log/**
 
 geckodriver.*
 

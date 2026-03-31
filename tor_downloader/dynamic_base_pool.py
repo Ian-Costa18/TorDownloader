@@ -19,8 +19,8 @@ from urllib.parse import unquote, urljoin, urlparse, urlunparse
 import requests
 from stemquests import TorInstance
 
-from .config_utils import min_int
-from .url_utils import ensure_trailing_slash, normalize_url_for_request
+from .utils.config_utils import min_int
+from .utils.url_utils import ensure_trailing_slash, normalize_url_for_request
 
 logger = logging.getLogger(__name__)
 
@@ -284,9 +284,7 @@ class DynamicBasePool:
 
                 hint = self._extract_redirect_hint(response)
                 if hint:
-                    hinted_url = normalize_url_for_request(
-                        urljoin(bootstrap_url, hint)
-                    )
+                    hinted_url = normalize_url_for_request(urljoin(bootstrap_url, hint))
                     logger.debug("Resolved redirect hint URL: %s", hinted_url)
                     return hinted_url
 

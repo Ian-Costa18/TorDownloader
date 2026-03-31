@@ -30,10 +30,12 @@ requires-python = ">=3.10"
 dev = ["pylint", "autopep8", "isort", "pytest", "pip-tools", "build", "twine"]
 
 [project.urls]
-"Homepage" = "https://github.com/SammyTheBEAST/TorDownloader"
-"Bug Tracker" = "https://github.com/SammyTheBEAST/TorDownloader/issues"
+"Homepage" = "https://github.com/Ian-Costa18/TorDownloader"
+"Bug Tracker" = "https://github.com/Ian-Costa18/TorDownloader/issues"
 
 [dependency-groups]
 dev = [
     "pytest>=9.0.2",
+    "ruff>=0.15.8",
+    "ty>=0.0.26",
 ]

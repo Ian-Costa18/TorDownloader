@@ -18,7 +18,9 @@ Configuration options:
     max_tor_checks: Number of times the Tor proxy will be checked to ensure Tor is working before crashing. Default is 5.
     tor_path: Path to the Tor executable (tor.exe). Often found in Tor Browser if installed (Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe).
     links_file: Path to links.json containing either a list of URLs or a mirror schema with {bases, files}.
-    log_file: Path to the log file. Log file will be created if it does not exist.
+    log_file: Base path for logs. Each run writes to a timestamped log file in the same directory.
+    log_max_archives: Maximum number of compressed historical logs to keep. Default is 30.
+    log_max_total_mb: Maximum total size (MB) for compressed historical logs. Default is 500.
     output_dir: Path to the directory to download the files to.
     config: Path to the configuration file. Only usable through the command line arguments.
 
@@ -31,19 +33,24 @@ import json
 import logging
 import sys
 from datetime import datetime
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Dict
 from urllib.parse import unquote
 
 from stemquests import TorInstance
 
-from .config_utils import clamp_min_int, coerce_cli_value, coerce_config_file_value, min_int
 from .download_runner import run_download_jobs
 from .dynamic_base_pool import BaseResolutionError, DynamicBasePool
 from .link_specs import load_links_spec
 from .mirror_planner import plan_download_jobs
 from .utils import TDFormatter, TqdmLoggingHandler
+from .utils.config_utils import (
+    clamp_min_int,
+    coerce_cli_value,
+    coerce_config_file_value,
+    min_int,
+)
+from .utils.log_management import prepare_log_files
 
 CURRENT_PATH = Path(__file__).parent
 DEFAULT_CONFIG = {
@@ -57,6 +64,8 @@ DEFAULT_CONFIG = {
     "probe_retries": 1,
     "links_file": CURRENT_PATH / "data/input/links.json",
     "log_file": CURRENT_PATH / "log/TorDownloader.log",
+    "log_max_archives": 30,
+    "log_max_total_mb": 500,
     "output_dir": CURRENT_PATH / "data/output",
 }
 
@@ -69,6 +78,8 @@ INT_CONFIG_KEYS = {
     "request_connect_timeout",
     "request_read_timeout",
     "probe_retries",
+    "log_max_archives",
+    "log_max_total_mb",
 }
 
 
@@ -160,21 +171,23 @@ def main():
     # Merge the config dictionaries, with the cmd arguments taking precedence
     CONFIG = {**file_config, **arg_config}
 
-    # Add a new line to the end of the log file before starting
-    Path(CONFIG["log_file"]).parents[0].mkdir(
-        parents=True, exist_ok=True
-    )  # Make the parent directories first
-    with open(CONFIG["log_file"], "a", encoding="utf-8") as log_file:
-        log_file.write("\n")
+    run_started_at = datetime.now()
+    base_log_file = Path(CONFIG["log_file"])
+    log_max_archives = min_int(CONFIG.get("log_max_archives", 30))
+    log_max_total_mb = min_int(CONFIG.get("log_max_total_mb", 500))
+    run_log_file, compressed_logs, deleted_logs, log_failures = prepare_log_files(
+        base_log_file=base_log_file,
+        run_started_at=run_started_at,
+        max_archives=log_max_archives,
+        max_total_mb=log_max_total_mb,
+    )
+
     # Setup logging
     logger = logging.getLogger()
     logger.setLevel(logging.DEBUG)
     for handler in logging.root.handlers[:]:
         logging.root.removeHandler(handler)
-    # Add a rotating handler with a max of 100 MB, keeping 5 backup files
-    handler = RotatingFileHandler(
-        CONFIG["log_file"], maxBytes=1024 * 1024 * 100, backupCount=5
-    )
+    handler = logging.FileHandler(run_log_file, encoding="utf-8")
     handler.setFormatter(
         logging.Formatter(fmt="%(asctime)s:%(levelname)s:%(name)s:%(message)s")
     )
@@ -185,7 +198,17 @@ def main():
     tqdm_handler.setFormatter(TDFormatter())
     logger.addHandler(tqdm_handler)
 
-    logger.info("Starting TorDownloader on %s", datetime.now().isoformat())
+    logger.info("Starting TorDownloader on %s", run_started_at.isoformat())
+    logger.info("Active run log file: %s", run_log_file)
+    logger.info(
+        "Log maintenance complete: compressed=%d, deleted=%d, max_archives=%d, max_total_mb=%d",
+        compressed_logs,
+        deleted_logs,
+        log_max_archives,
+        log_max_total_mb,
+    )
+    for failure in log_failures:
+        logger.warning("Log maintenance warning: %s", failure)
     logger.debug("Using config options: %s", str(CONFIG))
 
     links_file = str(CONFIG.get("links_file", DEFAULT_CONFIG["links_file"]))
@@ -260,9 +283,7 @@ def main():
 
     probe_retries = min_int(CONFIG.get("probe_retries", 3))
 
-    max_downloads, max_downloads_clamped = clamp_min_int(
-        CONFIG.get("max_downloads", 4)
-    )
+    max_downloads, max_downloads_clamped = clamp_min_int(CONFIG.get("max_downloads", 4))
     if max_downloads_clamped:
         logger.warning("max_downloads must be >= 1. Using %d.", max_downloads)
 
@@ -280,9 +301,7 @@ def main():
         download_workers = max_downloads
         download_workers_clamped = False
     else:
-        download_workers, download_workers_clamped = clamp_min_int(
-            download_workers_cfg
-        )
+        download_workers, download_workers_clamped = clamp_min_int(download_workers_cfg)
     if download_workers_clamped:
         logger.warning("download_workers must be >= 1. Using %d.", download_workers)
 

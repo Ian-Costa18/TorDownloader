@@ -6,8 +6,8 @@ from dataclasses import dataclass, field
 from urllib.parse import urljoin, urlparse
 
 from .link_specs import LinksSpec
-from .output_layout import normalize_relative_path, relative_path_from_url
-from .url_utils import ensure_trailing_slash
+from .utils.output_layout import normalize_relative_path, relative_path_from_url
+from .utils.url_utils import ensure_trailing_slash
 
 
 @dataclass

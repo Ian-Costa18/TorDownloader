@@ -19,7 +19,7 @@ from stemquests import TorInstance
 from tqdm import tqdm
 
 from . import logger
-from .url_utils import normalize_url_for_request
+from .utils.url_utils import normalize_url_for_request
 
 
 class LinkError(Exception):

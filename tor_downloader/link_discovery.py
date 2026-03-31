@@ -12,8 +12,8 @@ from urllib.parse import urljoin, urlparse
 import requests
 from tqdm import tqdm
 
-from .config_utils import min_int
-from .url_utils import normalize_url_for_request
+from .utils.config_utils import min_int
+from .utils.url_utils import normalize_url_for_request
 
 logger = logging.getLogger(__name__)
 

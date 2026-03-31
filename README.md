@@ -66,7 +66,9 @@ Configuration options:
 * max_tor_checks: Number of times the Tor proxy will be checked to ensure Tor is working before crashing. Default is 5.
 * tor_path: Path to the Tor executable (tor.exe). Often found in Tor Browser if installed (Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe).
 * links_file: Path to the JSON file containing either a list of URLs or a `{bases, files}` mirror schema.
-* log_file: Path to the log file. Log file will be created if it does not exist.
+* log_file: Base path for logs. Each run writes to a timestamped log file in the same directory.
+* log_max_archives: Maximum number of compressed historical logs to keep. Default is 30.
+* log_max_total_mb: Maximum total size (MB) for compressed historical logs. Default is 500.
 * output_dir: Path to the directory to download the files to.
 * config: Path to the configuration file. Only usable through the command line arguments.
 

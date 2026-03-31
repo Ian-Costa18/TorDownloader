@@ -7,7 +7,7 @@ import logging
 from dataclasses import dataclass, field
 from typing import List, Literal
 
-from .config_utils import parse_int_field
+from .utils.config_utils import parse_int_field
 
 logger = logging.getLogger(__name__)
 
