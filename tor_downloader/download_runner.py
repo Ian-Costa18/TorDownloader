@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING
 from urllib.parse import urljoin
 
 import requests
+from requests.adapters import HTTPAdapter
 from stemquests import TorConnectionError, TorInstance
 from tqdm import tqdm
 
@@ -37,6 +38,7 @@ if TYPE_CHECKING:
 def _get_thread_requests_session(
     tor_instance: TorInstance,
     tor_port: int,
+    session_pool_size: int | None = None,
 ):
     """Reuse one Tor-backed requests session per worker thread."""
     session = getattr(_THREAD_LOCAL, "requests_session", None)
@@ -47,6 +49,17 @@ def _get_thread_requests_session(
         tor_instance=tor_instance,
         tor_port=tor_port,
     )
+    if session_pool_size is not None:
+        pool_size = min_int(session_pool_size)
+        current_pool_size = getattr(downloader.requests_session, "_td_pool_size", 0)
+        if current_pool_size < pool_size:
+            adapter = HTTPAdapter(
+                pool_connections=pool_size,
+                pool_maxsize=pool_size,
+            )
+            downloader.requests_session.mount("http://", adapter)
+            downloader.requests_session.mount("https://", adapter)
+            setattr(downloader.requests_session, "_td_pool_size", pool_size)
     _THREAD_LOCAL.requests_session = downloader.requests_session
     return _THREAD_LOCAL.requests_session
 
@@ -173,13 +186,18 @@ def _enumerate_directory_once(
     request_timeout: tuple[int, int],
     probe_retries: int,
     base_pool: "DynamicBasePool | None" = None,
+    session_pool_size: int | None = None,
 ) -> tuple[list[DownloadJob], str]:
     """Enumerate one directory task and return immediate child tasks."""
     child_jobs: list[DownloadJob] = []
     parent_relative = job.relative_key
 
     for directory_url in _resolve_job_candidates(job, base_pool):
-        session = _get_thread_requests_session(tor_instance, tor_port)
+        session = _get_thread_requests_session(
+            tor_instance,
+            tor_port,
+            session_pool_size=session_pool_size,
+        )
         downloader = FileDownloader(
             tor_instance=tor_instance,
             tor_port=tor_port,
@@ -254,7 +272,7 @@ def _enumerate_directory_once(
         if child_jobs:
             return _dedupe_jobs(child_jobs), f"enumerated:{job.relative_key}"
 
-        logger.warning(
+        logger.debug(
             "No files discovered for directory candidate '%s', trying next candidate.",
             directory_url,
         )
@@ -269,6 +287,7 @@ def _download_file_job(
     tor_port: int,
     request_timeout: tuple[int, int],
     base_pool: "DynamicBasePool | None" = None,
+    session_pool_size: int | None = None,
 ) -> str:
     """Attempt one logical file using ordered candidate URLs."""
     target_dir = get_target_dir(output_dir, job.relative_key)
@@ -284,7 +303,11 @@ def _download_file_job(
 
     for candidate in _resolve_job_candidates(job, base_pool):
         try:
-            session = _get_thread_requests_session(tor_instance, tor_port)
+            session = _get_thread_requests_session(
+                tor_instance,
+                tor_port,
+                session_pool_size=session_pool_size,
+            )
             downloader = FileDownloader(
                 tor_instance=tor_instance,
                 tor_port=tor_port,
@@ -331,20 +354,17 @@ def run_download_jobs(
     output_dir: str,
     tor_instance: TorInstance,
     tor_port: int,
-    max_downloads: int,
     request_timeout: tuple[int, int],
     probe_retries: int,
     enum_workers: int | None = None,
     download_workers: int | None = None,
     base_pool: "DynamicBasePool | None" = None,
     progress_file: str | None = None,
+    session_pool_size: int | None = None,
 ) -> dict[str, str]:
     """Run mixed directory/file jobs concurrently and return failed results."""
-    worker_default = min_int(max_downloads)
-    enum_limit = min_int(enum_workers) if enum_workers is not None else worker_default
-    download_limit = (
-        min_int(download_workers) if download_workers is not None else worker_default
-    )
+    enum_limit = min_int(enum_workers) if enum_workers is not None else 1
+    download_limit = min_int(download_workers) if download_workers is not None else 1
     in_memory_results: dict[str, str] = {}
     pending_dir_jobs: deque[DownloadJob] = deque()
     pending_file_jobs: deque[DownloadJob] = deque()
@@ -386,7 +406,7 @@ def run_download_jobs(
             queued_dir_keys.add(key)
             if progress_store is not None and persist:
                 progress_store.enqueue_job(new_job)
-            enum_pbar.total += 1
+            enum_pbar.total = int(enum_pbar.total or 0) + 1
             enum_pbar.refresh()
             return
 
@@ -401,7 +421,7 @@ def run_download_jobs(
         queued_file_keys.add(key)
         if progress_store is not None and persist:
             progress_store.enqueue_job(new_job)
-        download_pbar.total += 1
+        download_pbar.total = int(download_pbar.total or 0) + 1
         download_pbar.refresh()
 
     if progress_file is not None:
@@ -444,6 +464,7 @@ def run_download_jobs(
                     request_timeout,
                     probe_retries,
                     base_pool,
+                    session_pool_size,
                 )
 
             def _submit_file(job: DownloadJob):
@@ -457,6 +478,7 @@ def run_download_jobs(
                     tor_port,
                     request_timeout,
                     base_pool,
+                    session_pool_size,
                 )
 
             while (

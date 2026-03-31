@@ -58,9 +58,8 @@ The command line arguments must be formatted like so:
 Configuration options:
 
 * socks_port: Port of Tor Socks5 proxy.
-* max_downloads: Maximum number of downloads to run at once.
-* enum_workers: Number of concurrent directory enumeration workers. Defaults to max_downloads.
-* download_workers: Number of concurrent file download workers. Defaults to max_downloads.
+* enum_workers: Number of concurrent directory enumeration workers.
+* download_workers: Number of concurrent file download workers.
 * request_connect_timeout: Per-request connect timeout in seconds. Default is 60.
 * request_read_timeout: Per-request read timeout in seconds. Default is 300.
 * max_tor_checks: Number of times the Tor proxy will be checked to ensure Tor is working before crashing. Default is 5.
@@ -73,7 +72,7 @@ Configuration options:
 * config: Path to the configuration file. Only usable through the command line arguments.
 
 Example command:
-    ```python -m tor_downloader max_downloads=7 enum_workers=12 download_workers=4 tor_path="Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe" links_file=links.json output_directory=output```
+    ```python -m tor_downloader enum_workers=12 download_workers=4 tor_path="Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe" links_file=links.json output_directory=output```
 
 ## Getting Results
 

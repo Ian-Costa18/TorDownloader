@@ -5,13 +5,19 @@ import sys
 
 import pytest
 
-from tor_downloader.__main__ import _derive_top_level_folder, get_config_args, get_config_file
+from tor_downloader.__main__ import (
+    _derive_top_level_folder,
+    get_config_args,
+    get_config_file,
+)
 from tor_downloader.link_specs import load_links_spec
 
 
 def test_load_links_spec_list_mode(tmp_path) -> None:
     links_file = tmp_path / "links.json"
-    links_file.write_text(json.dumps(["http://a.onion/x", "http://b.onion/y/"]), encoding="utf-8")
+    links_file.write_text(
+        json.dumps(["http://a.onion/x", "http://b.onion/y/"]), encoding="utf-8"
+    )
 
     spec = load_links_spec(str(links_file))
     assert spec.mode == "list"
@@ -46,7 +52,8 @@ def test_get_config_file_converts_values(tmp_path) -> None:
     config_file = tmp_path / "config.json"
     payload = {
         "socks_port": "9055",
-        "max_downloads": "7",
+        "enum_workers": "7",
+        "download_workers": "5",
         "request_connect_timeout": "20",
         "tor_path": "TOR/BIN",
         "empty_val": "",
@@ -56,7 +63,8 @@ def test_get_config_file_converts_values(tmp_path) -> None:
 
     config = get_config_file(str(config_file))
     assert config["socks_port"] == 9055
-    assert config["max_downloads"] == 7
+    assert config["enum_workers"] == 7
+    assert config["download_workers"] == 5
     assert config["request_connect_timeout"] == 20
     assert config["tor_path"] == "tor/bin"
     assert "empty_val" not in config
@@ -69,7 +77,8 @@ def test_get_config_args_parses_cli(monkeypatch) -> None:
         "argv",
         [
             "tor_downloader",
-            "max_downloads=10",
+            "enum_workers=10",
+            "download_workers=4",
             "probe_retries=2",
             "debug=true",
             "dry_run=false",
@@ -78,7 +87,8 @@ def test_get_config_args_parses_cli(monkeypatch) -> None:
     )
     args = get_config_args()
 
-    assert args["max_downloads"] == 10
+    assert args["enum_workers"] == 10
+    assert args["download_workers"] == 4
     assert args["probe_retries"] == 2
     assert args["debug"] is True
     assert args["dry_run"] is False

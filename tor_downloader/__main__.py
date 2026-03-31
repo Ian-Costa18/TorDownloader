@@ -10,9 +10,8 @@ The command line arguments must be formatted like so:
 
 Configuration options:
     socks_port: Port of Tor Socks5 proxy.
-    max_downloads: Maximum number of downloads to run at once.
-    enum_workers: Number of concurrent directory enumeration workers. Defaults to max_downloads.
-    download_workers: Number of concurrent file download workers. Defaults to max_downloads.
+    enum_workers: Number of concurrent directory enumeration workers.
+    download_workers: Number of concurrent file download workers.
     request_connect_timeout: Per-request connect timeout in seconds. Default is 60.
     request_read_timeout: Per-request read timeout in seconds. Default is 300.
     max_tor_checks: Number of times the Tor proxy will be checked to ensure Tor is working before crashing. Default is 5.
@@ -25,7 +24,7 @@ Configuration options:
     config: Path to the configuration file. Only usable through the command line arguments.
 
 Example command:
-    ```python main.py max_downloads=7 tor_path=Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe links_file=links.json output_directory=output```
+    ```python main.py enum_workers=12 download_workers=4 tor_path=Tor Browser\\Browser\\TorBrowser\\Tor\\tor.exe links_file=links.json output_directory=output```
 """
 
 # sourcery skip: assign-if-exp
@@ -55,10 +54,8 @@ from .utils.log_management import prepare_log_files
 CURRENT_PATH = Path(__file__).parent
 DEFAULT_CONFIG = {
     "socks_port": 9051,
-    "max_downloads": 10,
-    "enum_workers": 12,
-    "download_workers": 4,
-    # "max_downloads": 1,  # Set to 1 for testing
+    "enum_workers": 80,
+    "download_workers": 20,
     "request_connect_timeout": 60,
     "request_read_timeout": 300,
     "probe_retries": 1,
@@ -71,7 +68,6 @@ DEFAULT_CONFIG = {
 
 INT_CONFIG_KEYS = {
     "socks_port",
-    "max_downloads",
     "enum_workers",
     "download_workers",
     "max_tor_checks",
@@ -168,11 +164,21 @@ def main():
         else DEFAULT_CONFIG
     )
 
-    # Merge the config dictionaries, with the cmd arguments taking precedence
-    CONFIG = {**file_config, **arg_config}
+    # Merge the config dictionaries, with the cmd arguments taking precedence.
+    merged_config = {**file_config, **arg_config}
+    accepted_config_keys = set(DEFAULT_CONFIG) | {
+        "config",
+        "tor_path",
+        "max_tor_checks",
+    }
+    CONFIG = {
+        key: value
+        for key, value in merged_config.items()
+        if key in accepted_config_keys
+    }
 
     run_started_at = datetime.now()
-    base_log_file = Path(CONFIG["log_file"])
+    base_log_file = Path(str(CONFIG["log_file"]))
     log_max_archives = min_int(CONFIG.get("log_max_archives", 30))
     log_max_total_mb = min_int(CONFIG.get("log_max_total_mb", 500))
     run_log_file, compressed_logs, deleted_logs, log_failures = prepare_log_files(
@@ -227,7 +233,7 @@ def main():
         return
 
     # Create a Tor instance for the downloader
-    socks_port = int(CONFIG.get("socks_port", DEFAULT_CONFIG["socks_port"]))
+    socks_port = min_int(CONFIG.get("socks_port", DEFAULT_CONFIG["socks_port"]))
     tor_path = CONFIG.get("tor_path")
     tor_instance = (
         TorInstance(socks_port, str(tor_path))
@@ -235,9 +241,23 @@ def main():
         else TorInstance(socks_port)
     )
     request_timeout = (
-        int(CONFIG.get("request_connect_timeout", 60)),
-        int(CONFIG.get("request_read_timeout", 300)),
+        min_int(CONFIG.get("request_connect_timeout", 60)),
+        min_int(CONFIG.get("request_read_timeout", 300)),
     )
+
+    enum_workers, enum_workers_clamped = clamp_min_int(
+        CONFIG.get("enum_workers", DEFAULT_CONFIG["enum_workers"])
+    )
+    if enum_workers_clamped:
+        logger.warning("enum_workers must be >= 1. Using %d.", enum_workers)
+
+    download_workers, download_workers_clamped = clamp_min_int(
+        CONFIG.get("download_workers", DEFAULT_CONFIG["download_workers"])
+    )
+    if download_workers_clamped:
+        logger.warning("download_workers must be >= 1. Using %d.", download_workers)
+
+    session_pool_size = enum_workers + download_workers
 
     shared_dynamic_base_pool: DynamicBasePool | None = None
 
@@ -258,6 +278,7 @@ def main():
                     request_timeout=request_timeout,
                     tor_instance=tor_instance,
                     initial_bases=links_spec.bases,
+                    session_pool_size=session_pool_size,
                 )
                 refreshed_bases = base_pool.ensure_minimum_bases(force=True)
                 if len(refreshed_bases) > 0:
@@ -267,7 +288,7 @@ def main():
                         "Dynamic base refresh loaded %d base(s).",
                         len(refreshed_bases),
                     )
-                    logger.info(
+                    logger.debug(
                         "Dynamic base pool contents: %s",
                         ", ".join(refreshed_bases),
                     )
@@ -283,28 +304,6 @@ def main():
 
     probe_retries = min_int(CONFIG.get("probe_retries", 3))
 
-    max_downloads, max_downloads_clamped = clamp_min_int(CONFIG.get("max_downloads", 4))
-    if max_downloads_clamped:
-        logger.warning("max_downloads must be >= 1. Using %d.", max_downloads)
-
-    enum_workers_cfg = CONFIG.get("enum_workers")
-    if enum_workers_cfg is None:
-        enum_workers = max_downloads
-        enum_workers_clamped = False
-    else:
-        enum_workers, enum_workers_clamped = clamp_min_int(enum_workers_cfg)
-    if enum_workers_clamped:
-        logger.warning("enum_workers must be >= 1. Using %d.", enum_workers)
-
-    download_workers_cfg = CONFIG.get("download_workers")
-    if download_workers_cfg is None:
-        download_workers = max_downloads
-        download_workers_clamped = False
-    else:
-        download_workers, download_workers_clamped = clamp_min_int(download_workers_cfg)
-    if download_workers_clamped:
-        logger.warning("download_workers must be >= 1. Using %d.", download_workers)
-
     try:
         jobs = plan_download_jobs(links_spec)
         if len(jobs) == 0:
@@ -316,14 +315,14 @@ def main():
             jobs=jobs,
             output_dir=str(CONFIG["output_dir"]),
             tor_instance=tor_instance,
-            tor_port=CONFIG["socks_port"],
-            max_downloads=max_downloads,
+            tor_port=socks_port,
             request_timeout=request_timeout,
             probe_retries=probe_retries,
             enum_workers=enum_workers,
             download_workers=download_workers,
             base_pool=shared_dynamic_base_pool,
             progress_file=progress_file,
+            session_pool_size=session_pool_size,
         )
     except ConnectionError:
         logger.error("Connection error, restarting script...")

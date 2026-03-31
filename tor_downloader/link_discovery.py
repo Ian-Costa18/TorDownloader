@@ -128,13 +128,13 @@ def get_download_links_web(
         probe_retries=probe_retries,
     )
     if site == "":
-        logger.warning("Unable to fetch directory listing text from '%s'.", url)
+        logger.debug("Unable to fetch directory listing text from '%s'.", url)
         return []
     links = [
         link for link in re.findall(regex, site) if not _is_ignored_link_target(link)
     ]
-    logger.info("Found %d links through url '%s'.", len(links), url)
-    logger.debug("Link list: %s", ", ".join(links))
+    logger.debug("Found %d links through url '%s'.", len(links), url)
+    # logger.debug("Link list: %s", ", ".join(links))
     return links
 
 

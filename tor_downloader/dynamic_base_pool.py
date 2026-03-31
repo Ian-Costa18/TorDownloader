@@ -17,6 +17,7 @@ from typing import Iterable, Optional
 from urllib.parse import unquote, urljoin, urlparse, urlunparse
 
 import requests
+from requests.adapters import HTTPAdapter
 from stemquests import TorInstance
 
 from .utils.config_utils import min_int
@@ -136,6 +137,7 @@ class DynamicBasePool:
         initial_bases: Optional[Iterable[str]] = None,
         refresh_cooldown_sec: float = 10.0,
         discovery_workers: Optional[int] = None,
+        session_pool_size: Optional[int] = None,
         session_init_retries: int = 3,
         bootstrap_retries: int = 2,
         retry_backoff_sec: float = 1.0,
@@ -157,6 +159,9 @@ class DynamicBasePool:
             min_int(discovery_workers)
             if discovery_workers is not None
             else min_int(min_bases)
+        )
+        self.session_pool_size = (
+            min_int(session_pool_size) if session_pool_size is not None else None
         )
         self.session_init_retries = min_int(session_init_retries)
         self.bootstrap_retries = min_int(bootstrap_retries)
@@ -215,9 +220,19 @@ class DynamicBasePool:
         for attempt in range(1, self.session_init_retries + 1):
             try:
                 session, session_num = self._tor_instance.get_session_with_number()
+                if self.session_pool_size is not None:
+                    current_pool_size = getattr(session, "_td_pool_size", 0)
+                    if current_pool_size < self.session_pool_size:
+                        adapter = HTTPAdapter(
+                            pool_connections=self.session_pool_size,
+                            pool_maxsize=self.session_pool_size,
+                        )
+                        session.mount("http://", adapter)
+                        session.mount("https://", adapter)
+                        setattr(session, "_td_pool_size", self.session_pool_size)
                 with self._lock:
                     self._session = session
-                logger.info(
+                logger.debug(
                     "Acquired Tor session for dynamic discovery (session=%s attempt=%d/%d)",
                     session_num,
                     attempt,
