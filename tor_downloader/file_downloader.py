@@ -11,7 +11,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
-from urllib.parse import quote, unquote, urlsplit, urlunsplit
+from urllib.parse import unquote, urlsplit
 
 import requests
 import validators
@@ -19,6 +19,7 @@ from stemquests import TorInstance
 from tqdm import tqdm
 
 from . import logger
+from .url_utils import normalize_url_for_request
 
 
 class LinkError(Exception):
@@ -131,20 +132,8 @@ class FileDownloader(object):
 
     @staticmethod
     def _normalize_request_url(url: str) -> str:
-        """Encode unsafe URL characters while preserving structure."""
-        parsed = urlsplit(url)
-        encoded_path = quote(unquote(parsed.path), safe="/%:@")
-        encoded_query = quote(unquote(parsed.query), safe="=&;%:+,/?%")
-        encoded_fragment = quote(unquote(parsed.fragment), safe="=&;%:+,/?%")
-        return urlunsplit(
-            (
-                parsed.scheme,
-                parsed.netloc,
-                encoded_path,
-                encoded_query,
-                encoded_fragment,
-            )
-        )
+        """Backward-compatible wrapper around shared URL request normalization."""
+        return normalize_url_for_request(url)
 
     def _check_local_file(
         self, filename: str, chunk_size: int, full_path: str, header: Dict = None

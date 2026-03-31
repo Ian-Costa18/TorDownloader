@@ -32,3 +32,8 @@ dev = ["pylint", "autopep8", "isort", "pytest", "pip-tools", "build", "twine"]
 [project.urls]
 "Homepage" = "https://github.com/SammyTheBEAST/TorDownloader"
 "Bug Tracker" = "https://github.com/SammyTheBEAST/TorDownloader/issues"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.2",
+]
