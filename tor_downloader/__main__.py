@@ -34,10 +34,12 @@ from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Dict
+from urllib.parse import unquote
 
 from stemquests import TorInstance
 
 from .download_runner import run_download_jobs
+from .dynamic_base_pool import BaseResolutionError, DynamicBasePool
 from .link_specs import load_links_spec
 from .mirror_planner import plan_download_jobs
 from .utils import TDFormatter, TqdmLoggingHandler
@@ -51,11 +53,25 @@ DEFAULT_CONFIG = {
     # "max_downloads": 1,  # Set to 1 for testing
     "request_connect_timeout": 60,
     "request_read_timeout": 300,
-    "probe_retries": 3,
+    "probe_retries": 1,
     "links_file": CURRENT_PATH / "data/input/links.json",
     "log_file": CURRENT_PATH / "log/TorDownloader.log",
     "output_dir": CURRENT_PATH / "data/output",
 }
+
+
+def _derive_top_level_folder(file_entries: list[str]) -> str | None:
+    """Infer the top-level folder from relative mirror file entries."""
+    for entry in file_entries:
+        if "://" in entry:
+            continue
+        normalized = entry.strip().lstrip("/")
+        if normalized == "":
+            continue
+        top = normalized.split("/", 1)[0].strip()
+        if top:
+            return unquote(top)
+    return None
 
 
 def get_config_file(config_file: str) -> Dict:
@@ -196,6 +212,49 @@ def main():
         int(CONFIG.get("request_connect_timeout", 60)),
         int(CONFIG.get("request_read_timeout", 300)),
     )
+
+    shared_dynamic_base_pool: DynamicBasePool | None = None
+
+    if links_spec.mode == "mirror" and links_spec.dynamic_base is not None:
+        top_level_folder = _derive_top_level_folder(links_spec.files)
+        if top_level_folder is None:
+            logger.warning(
+                "dynamic_base is set, but top-level folder could not be inferred from files. "
+                "Skipping dynamic base refresh."
+            )
+        else:
+            min_bases = max(5, int(links_spec.dynamic_min_bases))
+            try:
+                base_pool = DynamicBasePool(
+                    bootstrap_urls=[links_spec.dynamic_base],
+                    top_level_folder=top_level_folder,
+                    min_bases=min_bases,
+                    request_timeout=request_timeout,
+                    tor_instance=tor_instance,
+                    initial_bases=links_spec.bases,
+                )
+                refreshed_bases = base_pool.ensure_minimum_bases(force=True)
+                if len(refreshed_bases) > 0:
+                    links_spec.bases = refreshed_bases
+                    shared_dynamic_base_pool = base_pool
+                    logger.info(
+                        "Dynamic base refresh loaded %d base(s).",
+                        len(refreshed_bases),
+                    )
+                    logger.info(
+                        "Dynamic base pool contents: %s",
+                        ", ".join(refreshed_bases),
+                    )
+                else:
+                    logger.warning(
+                        "Dynamic base refresh returned no bases. Using static bases from links file."
+                    )
+            except (BaseResolutionError, ValueError, OSError) as err:
+                logger.warning(
+                    "Dynamic base refresh failed (%s). Falling back to static bases.",
+                    err,
+                )
+
     probe_retries = max(1, int(CONFIG.get("probe_retries", 3)))
     max_downloads = max(1, int(CONFIG.get("max_downloads", 4)))
     if max_downloads != int(CONFIG.get("max_downloads", 4)):
@@ -236,6 +295,7 @@ def main():
             probe_retries=probe_retries,
             enum_workers=enum_workers,
             download_workers=download_workers,
+            base_pool=shared_dynamic_base_pool,
         )
     except ConnectionError:
         logger.error("Connection error, restarting script...")

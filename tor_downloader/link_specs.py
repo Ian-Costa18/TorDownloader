@@ -18,6 +18,8 @@ class LinksSpec:
     links: List[str] = field(default_factory=list)
     bases: List[str] = field(default_factory=list)
     files: List[str] = field(default_factory=list)
+    dynamic_base: str | None = None
+    dynamic_min_bases: int = 5
 
 
 def _clean_string_list(values, field_name: str) -> List[str]:
@@ -52,19 +54,53 @@ def load_links_spec(json_path: str) -> LinksSpec:
         return LinksSpec(mode="list", links=links)
 
     if isinstance(payload, dict):
-        if "bases" not in payload or "files" not in payload:
+        dynamic_base = payload.get("dynamic_base")
+        if dynamic_base is not None:
+            if not isinstance(dynamic_base, str):
+                raise ValueError("'dynamic_base' must be a string when provided")
+            dynamic_base = dynamic_base.strip()
+            if dynamic_base == "":
+                raise ValueError("'dynamic_base' cannot be empty")
+
+        if "files" not in payload:
+            raise ValueError("Dictionary links schema must contain 'files' key")
+        files = _clean_string_list(payload.get("files"), "files")
+
+        if "bases" in payload:
+            bases = _clean_string_list(payload.get("bases"), "bases")
+        elif dynamic_base is not None:
+            bases = []
+        else:
             raise ValueError(
-                "Dictionary links schema must contain 'bases' and 'files' keys"
+                "Dictionary links schema must contain 'bases' key unless 'dynamic_base' is provided"
             )
 
-        bases = _clean_string_list(payload.get("bases"), "bases")
-        files = _clean_string_list(payload.get("files"), "files")
+        dynamic_min_bases_raw = payload.get("dynamic_min_bases", 5)
+        try:
+            dynamic_min_bases = int(dynamic_min_bases_raw)
+        except (TypeError, ValueError) as err:
+            raise ValueError("'dynamic_min_bases' must be an integer") from err
+        if dynamic_min_bases < 1:
+            raise ValueError("'dynamic_min_bases' must be >= 1")
+
         logger.info(
             "Found mirror schema in '%s' with %d base(s) and %d file entry(ies)",
             json_path,
             len(bases),
             len(files),
         )
-        return LinksSpec(mode="mirror", bases=bases, files=files)
+        if dynamic_base is not None:
+            logger.info(
+                "Dynamic base mode enabled with bootstrap URL '%s' (min bases: %d)",
+                dynamic_base,
+                dynamic_min_bases,
+            )
+        return LinksSpec(
+            mode="mirror",
+            bases=bases,
+            files=files,
+            dynamic_base=dynamic_base,
+            dynamic_min_bases=dynamic_min_bases,
+        )
 
     raise ValueError("Unsupported links.json schema. Expected list or dict")

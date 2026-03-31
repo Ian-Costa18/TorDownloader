@@ -7,12 +7,44 @@ import re
 from collections import deque
 from time import sleep
 from typing import Iterator, Optional, Set, Tuple
-from urllib.parse import urljoin, urlparse
+from urllib.parse import quote, unquote, urljoin, urlparse, urlsplit, urlunsplit
 
 import requests
 from tqdm import tqdm
 
 logger = logging.getLogger(__name__)
+
+
+_PLACEHOLDER_TOKEN_RE = re.compile(r"^\s*\$\{[^}]+}\s*$")
+
+
+def _normalize_url_for_request(url: str) -> str:
+    """Encode unsafe URL characters while preserving URL structure."""
+    parsed = urlsplit(url)
+    encoded_path = quote(unquote(parsed.path), safe="/%:@")
+    encoded_query = quote(unquote(parsed.query), safe="=&;%:+,/?%")
+    encoded_fragment = quote(unquote(parsed.fragment), safe="=&;%:+,/?%")
+    return urlunsplit(
+        (parsed.scheme, parsed.netloc, encoded_path, encoded_query, encoded_fragment)
+    )
+
+
+def _is_ignored_link_target(link: str) -> bool:
+    """Ignore templated or non-download href values.
+
+    Some directory pages emit placeholders like ${href}; these should never
+    be treated as concrete files.
+    """
+    candidate = link.strip()
+    lower_candidate = candidate.lower()
+    return (
+        candidate == ""
+        or _PLACEHOLDER_TOKEN_RE.match(candidate) is not None
+        or (candidate.startswith("{{") and candidate.endswith("}}"))
+        or lower_candidate.startswith("javascript:")
+        or lower_candidate.startswith("mailto:")
+        or candidate.startswith("#")
+    )
 
 
 def detect_content_type(
@@ -106,7 +138,9 @@ def get_download_links_web(
     if site == "":
         logger.warning("Unable to fetch directory listing text from '%s'.", url)
         return []
-    links = re.findall(regex, site)
+    links = [
+        link for link in re.findall(regex, site) if not _is_ignored_link_target(link)
+    ]
     logger.info("Found %d links through url '%s'.", len(links), url)
     logger.debug("Link list: %s", ", ".join(links))
     return links
@@ -115,6 +149,13 @@ def get_download_links_web(
 def _normalize_dir_url(url: str) -> str:
     """Normalize directory URLs so visited checks are consistent."""
     return url if url.endswith("/") else f"{url}/"
+
+
+def _is_same_host_url(base_url: str, candidate_url: str) -> bool:
+    """Only follow links that stay on the same host as the current directory."""
+    base_host = urlparse(base_url).netloc.lower()
+    candidate_host = urlparse(candidate_url).netloc.lower()
+    return candidate_host == "" or candidate_host == base_host
 
 
 def _relative_dir_from_root(start_url: str, current_dir_url: str) -> str:
@@ -176,9 +217,16 @@ def stream_directory_files(
             relative_dir = _relative_dir_from_root(start_dir_url, dir_url)
 
             for link in links:
-                abs_url = urljoin(dir_url, link)
                 if link == "../":
                     continue
+                if link.startswith("?"):
+                    continue
+
+                abs_url = urljoin(dir_url, link)
+                if not _is_same_host_url(dir_url, abs_url):
+                    continue
+
+                abs_url = _normalize_url_for_request(abs_url)
 
                 if link.endswith("/"):
                     subdir_url = _normalize_dir_url(abs_url)
@@ -231,7 +279,14 @@ def list_directory_entries(
     for link in links:
         if link == "../":
             continue
+        if link.startswith("?"):
+            continue
+
         abs_url = urljoin(current_dir, link)
+        if not _is_same_host_url(current_dir, abs_url):
+            continue
+
+        abs_url = _normalize_url_for_request(abs_url)
         if link.endswith("/"):
             subdir_urls.append(_normalize_dir_url(abs_url))
             continue

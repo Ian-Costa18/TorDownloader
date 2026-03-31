@@ -7,8 +7,10 @@ import threading
 from collections import deque
 from concurrent.futures import FIRST_COMPLETED, ThreadPoolExecutor, wait
 from pathlib import Path
+from typing import TYPE_CHECKING
 from urllib.parse import urljoin
 
+import requests
 from stemquests import TorConnectionError, TorInstance
 from tqdm import tqdm
 
@@ -24,6 +26,9 @@ from .output_layout import (
 
 logger = logging.getLogger(__name__)
 _THREAD_LOCAL = threading.local()
+
+if TYPE_CHECKING:
+    from .dynamic_base_pool import DynamicBasePool
 
 
 def _get_thread_requests_session(
@@ -81,9 +86,21 @@ def _build_child_candidates(
     parent_job: DownloadJob,
     discovered_url: str,
     is_directory: bool,
+    base_pool: "DynamicBasePool | None" = None,
 ) -> list[str]:
     """Build candidate URLs for discovered child entries."""
     if parent_job.bases:
+        if base_pool is not None:
+            return dedupe_preserve_order(
+                [
+                    *base_pool.build_candidate_urls(
+                        child_relative,
+                        directory=is_directory,
+                    ),
+                    discovered_url,
+                ]
+            )
+
         suffix = f"{child_relative}/" if is_directory else child_relative
         return [
             urljoin(_with_trailing_slash(base), suffix) for base in parent_job.bases
@@ -93,18 +110,76 @@ def _build_child_candidates(
     return [discovered_url]
 
 
+def _resolve_job_candidates(
+    job: DownloadJob,
+    base_pool: "DynamicBasePool | None",
+) -> list[str]:
+    """Get up-to-date candidates for a job using shared dynamic base pool."""
+    if base_pool is None or not job.bases:
+        return list(job.candidate_urls)
+
+    return dedupe_preserve_order(
+        [
+            *base_pool.build_candidate_urls(
+                job.relative_key,
+                directory=job.is_directory,
+            ),
+            *job.candidate_urls,
+        ]
+    )
+
+
+def _candidate_to_base(
+    candidate_url: str,
+    job: DownloadJob,
+    base_pool: "DynamicBasePool | None",
+) -> str | None:
+    """Find which base generated a failed candidate URL."""
+    base_candidates = (
+        base_pool.get_bases() if base_pool is not None else list(job.bases)
+    )
+    normalized_candidate = _with_trailing_slash(candidate_url)
+    for base in sorted(base_candidates, key=len, reverse=True):
+        normalized_base = _with_trailing_slash(base)
+        if normalized_candidate.startswith(normalized_base):
+            return normalized_base
+    return None
+
+
+def _report_candidate_failure(
+    candidate_url: str,
+    job: DownloadJob,
+    base_pool: "DynamicBasePool | None",
+) -> None:
+    """Evict failed base and refresh pool for mirror jobs."""
+    if base_pool is None or not job.bases:
+        return
+
+    failed_base = _candidate_to_base(candidate_url, job, base_pool)
+    if failed_base is None:
+        return
+
+    refreshed = base_pool.report_base_failure(failed_base)
+    logger.info(
+        "Dynamic pool updated after failure for base '%s'. New pool size=%d",
+        failed_base,
+        len(refreshed),
+    )
+
+
 def _enumerate_directory_once(
     job: DownloadJob,
     tor_instance: TorInstance,
     tor_port: int,
     request_timeout: tuple[int, int],
     probe_retries: int,
+    base_pool: "DynamicBasePool | None" = None,
 ) -> tuple[list[DownloadJob], str]:
     """Enumerate one directory task and return immediate child tasks."""
     child_jobs: list[DownloadJob] = []
     parent_relative = job.relative_key
 
-    for directory_url in job.candidate_urls:
+    for directory_url in _resolve_job_candidates(job, base_pool):
         session = _get_thread_requests_session(tor_instance, tor_port)
         downloader = FileDownloader(
             tor_instance=tor_instance,
@@ -126,7 +201,22 @@ def _enumerate_directory_once(
                 directory_url,
                 err,
             )
+            if isinstance(
+                err,
+                (
+                    requests.exceptions.Timeout,
+                    requests.exceptions.ConnectionError,
+                    TorConnectionError,
+                ),
+            ):
+                _report_candidate_failure(directory_url, job, base_pool)
             continue
+
+        child_bases = (
+            base_pool.get_bases()
+            if base_pool is not None and job.bases
+            else list(job.bases)
+        )
 
         for subdir_url in subdir_urls:
             subdir_name = filename_from_url(subdir_url)
@@ -137,11 +227,11 @@ def _enumerate_directory_once(
                 DownloadJob(
                     relative_key=subdir_relative,
                     candidate_urls=_build_child_candidates(
-                        subdir_relative, job, subdir_url, True
+                        subdir_relative, job, subdir_url, True, base_pool
                     ),
                     is_directory=True,
                     source_entry=job.source_entry,
-                    bases=list(job.bases),
+                    bases=child_bases,
                 )
             )
 
@@ -154,11 +244,11 @@ def _enumerate_directory_once(
                 DownloadJob(
                     relative_key=file_relative,
                     candidate_urls=_build_child_candidates(
-                        file_relative, job, file_url, False
+                        file_relative, job, file_url, False, base_pool
                     ),
                     is_directory=False,
                     source_entry=job.source_entry,
-                    bases=list(job.bases),
+                    bases=child_bases,
                 )
             )
 
@@ -179,6 +269,7 @@ def _download_file_job(
     tor_instance: TorInstance,
     tor_port: int,
     request_timeout: tuple[int, int],
+    base_pool: "DynamicBasePool | None" = None,
 ) -> str:
     """Attempt one logical file using ordered candidate URLs."""
     target_dir = get_target_dir(output_dir, job.relative_key)
@@ -192,7 +283,7 @@ def _download_file_job(
         )
         return str(destination)
 
-    for candidate in job.candidate_urls:
+    for candidate in _resolve_job_candidates(job, base_pool):
         try:
             session = _get_thread_requests_session(tor_instance, tor_port)
             downloader = FileDownloader(
@@ -216,6 +307,7 @@ def _download_file_job(
                 candidate,
                 err,
             )
+            _report_candidate_failure(candidate, job, base_pool)
         except Exception as err:  # pylint: disable=broad-exception-caught
             logger.warning(
                 "Candidate '%s' failed for '%s': %s",
@@ -223,6 +315,14 @@ def _download_file_job(
                 job.relative_key,
                 err,
             )
+            if isinstance(
+                err,
+                (
+                    requests.exceptions.Timeout,
+                    requests.exceptions.ConnectionError,
+                ),
+            ):
+                _report_candidate_failure(candidate, job, base_pool)
 
     return f"failed:{job.relative_key}"
 
@@ -237,6 +337,7 @@ def run_download_jobs(
     probe_retries: int,
     enum_workers: int | None = None,
     download_workers: int | None = None,
+    base_pool: "DynamicBasePool | None" = None,
 ) -> dict[str, str]:
     """Run mixed directory/file jobs concurrently and return results by relative key."""
     worker_default = max(1, int(max_downloads))
@@ -310,6 +411,7 @@ def run_download_jobs(
                     tor_port,
                     request_timeout,
                     probe_retries,
+                    base_pool,
                 )
 
             def _submit_file(job: DownloadJob):
@@ -322,6 +424,7 @@ def run_download_jobs(
                     tor_instance,
                     tor_port,
                     request_timeout,
+                    base_pool,
                 )
 
             while (

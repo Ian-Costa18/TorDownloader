@@ -11,6 +11,7 @@ import sys
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, Optional, Tuple
+from urllib.parse import quote, unquote, urlsplit, urlunsplit
 
 import requests
 import validators
@@ -95,21 +96,24 @@ class FileDownloader(object):
             requests.exceptions.RequestException: If there is another error with the request.
         """
         try:
-            if not validators.url(url):
+            normalized_url = self._normalize_request_url(url)
+
+            if not validators.url(normalized_url):
                 logger.error("Invalid URL: %s", url)
                 raise LinkError("Invalid url")
-            filename = os.path.basename(url)
+            filename = unquote(os.path.basename(urlsplit(url).path))
             _, ext = os.path.splitext(filename)
             if ext:
                 return filename
             header = session.head(
-                url,
+                normalized_url,
                 allow_redirects=False,
                 timeout=self.request_timeout,
             ).headers
+            location = header.get("Location")
             return (
-                os.path.basename(header.get("Location"))
-                if "Location" in header
+                unquote(os.path.basename(urlsplit(location).path))
+                if location
                 else filename
             )
         except requests.exceptions.HTTPError as errh:
@@ -124,6 +128,23 @@ class FileDownloader(object):
         except requests.exceptions.RequestException as err:
             logger.error("Oops, Something Else: %s | URL: %s", err, url)
             raise err
+
+    @staticmethod
+    def _normalize_request_url(url: str) -> str:
+        """Encode unsafe URL characters while preserving structure."""
+        parsed = urlsplit(url)
+        encoded_path = quote(unquote(parsed.path), safe="/%:@")
+        encoded_query = quote(unquote(parsed.query), safe="=&;%:+,/?%")
+        encoded_fragment = quote(unquote(parsed.fragment), safe="=&;%:+,/?%")
+        return urlunsplit(
+            (
+                parsed.scheme,
+                parsed.netloc,
+                encoded_path,
+                encoded_query,
+                encoded_fragment,
+            )
+        )
 
     def _check_local_file(
         self, filename: str, chunk_size: int, full_path: str, header: Dict = None
@@ -182,7 +203,8 @@ class FileDownloader(object):
             return None
         self.num_retries += 1
 
-        logger.debug("Starting download from URL: %s", url)
+        normalized_url = self._normalize_request_url(url)
+        logger.debug("Starting download from URL: %s", normalized_url)
 
         # Check if the target_dir is a valid directory
         target_path = Path(target_dir)
@@ -227,7 +249,7 @@ class FileDownloader(object):
         )
         try:
             req = self.requests_session.get(
-                url,
+                normalized_url,
                 headers=resume_header,
                 stream=True,
                 verify=False,
