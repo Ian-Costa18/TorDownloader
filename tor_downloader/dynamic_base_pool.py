@@ -19,6 +19,9 @@ from urllib.parse import unquote, urljoin, urlparse, urlunparse
 import requests
 from stemquests import TorInstance
 
+from .config_utils import min_int
+from .url_utils import ensure_trailing_slash, normalize_url_for_request
+
 logger = logging.getLogger(__name__)
 
 
@@ -27,28 +30,6 @@ _PLACEHOLDER_TOKEN_RE = re.compile(r"^\s*\$\{[^}]+}\s*$")
 
 class BaseResolutionError(RuntimeError):
     """Raised when a dynamic mirror base cannot be discovered."""
-
-
-def _with_trailing_slash(url: str) -> str:
-    return url if url.endswith("/") else f"{url}/"
-
-
-def _normalize_url_for_request(url: str) -> str:
-    """Encode unsafe URL characters while preserving URL structure."""
-    parsed = urlparse(url)
-    encoded_path = requests.utils.requote_uri(parsed.path)
-    encoded_query = requests.utils.requote_uri(parsed.query)
-    encoded_fragment = requests.utils.requote_uri(parsed.fragment)
-    return urlunparse(
-        (
-            parsed.scheme,
-            parsed.netloc,
-            encoded_path,
-            parsed.params,
-            encoded_query,
-            encoded_fragment,
-        )
-    )
 
 
 def _is_placeholder_hint(candidate: str) -> bool:
@@ -89,7 +70,7 @@ def extract_dynamic_base(url: str, top_level_folder: str) -> str:
             raise BaseResolutionError(
                 f"Could not find top-level folder '{folder_token}' in URL: {url}"
             )
-        fallback_base = _with_trailing_slash(
+        fallback_base = ensure_trailing_slash(
             urlunparse(
                 (
                     parsed.scheme,
@@ -112,7 +93,7 @@ def extract_dynamic_base(url: str, top_level_folder: str) -> str:
         )
 
     base_path = "/" + "/".join(raw_segments[:folder_idx]) + "/"
-    extracted_base = _with_trailing_slash(
+    extracted_base = ensure_trailing_slash(
         urlunparse((parsed.scheme, parsed.netloc, base_path, "", "", ""))
     )
     logger.debug("Extracted dynamic base from redirect path: %s", extracted_base)
@@ -173,12 +154,12 @@ class DynamicBasePool:
         self.request_timeout = request_timeout
         self.refresh_cooldown_sec = max(0.0, float(refresh_cooldown_sec))
         self.discovery_workers = (
-            max(1, int(discovery_workers))
+            min_int(discovery_workers)
             if discovery_workers is not None
-            else max(1, int(min_bases))
+            else min_int(min_bases)
         )
-        self.session_init_retries = max(1, int(session_init_retries))
-        self.bootstrap_retries = max(1, int(bootstrap_retries))
+        self.session_init_retries = min_int(session_init_retries)
+        self.bootstrap_retries = min_int(bootstrap_retries)
         self.retry_backoff_sec = max(0.0, float(retry_backoff_sec))
 
         self._tor_instance = tor_instance or TorInstance(socks_port=tor_port)
@@ -202,7 +183,7 @@ class DynamicBasePool:
                 self._add_base(base)
 
     def _add_base(self, base: str) -> bool:
-        normalized = _with_trailing_slash(base.strip())
+        normalized = ensure_trailing_slash(base.strip())
         if normalized in self._known_bases:
             logger.debug("Skipping duplicate mirror base: %s", normalized)
             return False
@@ -303,7 +284,7 @@ class DynamicBasePool:
 
                 hint = self._extract_redirect_hint(response)
                 if hint:
-                    hinted_url = _normalize_url_for_request(
+                    hinted_url = normalize_url_for_request(
                         urljoin(bootstrap_url, hint)
                     )
                     logger.debug("Resolved redirect hint URL: %s", hinted_url)
@@ -407,7 +388,7 @@ class DynamicBasePool:
 
         max_attempts = max(8, missing * 8)
         attempts_remaining = max_attempts
-        workers = max(1, int(self.discovery_workers))
+        workers = min_int(self.discovery_workers)
 
         while attempts_remaining > 0:
             with self._lock:
@@ -458,7 +439,7 @@ class DynamicBasePool:
 
     def report_base_failure(self, failed_base: str) -> list[str]:
         """Evict a failed base, then refill the pool back to min_bases."""
-        normalized = _with_trailing_slash(failed_base.strip())
+        normalized = ensure_trailing_slash(failed_base.strip())
         with self._lock:
             if normalized in self._known_bases:
                 self._known_bases.discard(normalized)
@@ -481,7 +462,7 @@ class DynamicBasePool:
             suffix = f"{suffix}/"
 
         return [
-            urljoin(_with_trailing_slash(base), suffix) for base in self.get_bases()
+            urljoin(ensure_trailing_slash(base), suffix) for base in self.get_bases()
         ]
 
     def write_links_schema(self, files: list[str], output_path: str) -> Path:

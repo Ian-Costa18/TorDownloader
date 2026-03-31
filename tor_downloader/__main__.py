@@ -38,6 +38,7 @@ from urllib.parse import unquote
 
 from stemquests import TorInstance
 
+from .config_utils import clamp_min_int, coerce_cli_value, coerce_config_file_value, min_int
 from .download_runner import run_download_jobs
 from .dynamic_base_pool import BaseResolutionError, DynamicBasePool
 from .link_specs import load_links_spec
@@ -57,6 +58,17 @@ DEFAULT_CONFIG = {
     "links_file": CURRENT_PATH / "data/input/links.json",
     "log_file": CURRENT_PATH / "log/TorDownloader.log",
     "output_dir": CURRENT_PATH / "data/output",
+}
+
+INT_CONFIG_KEYS = {
+    "socks_port",
+    "max_downloads",
+    "enum_workers",
+    "download_workers",
+    "max_tor_checks",
+    "request_connect_timeout",
+    "request_read_timeout",
+    "probe_retries",
 }
 
 
@@ -98,22 +110,11 @@ def get_config_file(config_file: str) -> Dict:
             if value == "" or value is None:
                 continue
             # Convert the value to the correct type
-            match key:
-                case (
-                    "socks_port"
-                    | "max_downloads"
-                    | "enum_workers"
-                    | "download_workers"
-                    | "max_tor_checks"
-                    | "request_connect_timeout"
-                    | "request_read_timeout"
-                    | "probe_retries"
-                ):
-                    clean_config[key] = int(value)
-                case _:
-                    clean_config[key] = (
-                        value.lower() if isinstance(value, str) else value
-                    )
+            clean_config[key] = coerce_config_file_value(
+                key,
+                value,
+                int_keys=INT_CONFIG_KEYS,
+            )
     return clean_config
 
 
@@ -135,13 +136,7 @@ def get_config_args() -> Dict:
                 f"Invalid command line argument: '{arg}'. Arguments must be formatted like so: 'CONFIG=SETTING'."
             )
         arg_key, arg_val = arg_split
-        if arg_val.isnumeric():
-            arg_val = int(arg_val)
-        elif arg_val.lower() == "true":
-            arg_val = True
-        elif arg_val.lower() == "false":
-            arg_val = False
-        arg_dict[arg_key] = arg_val
+        arg_dict[arg_key] = coerce_cli_value(arg_val)
 
     return arg_dict
 
@@ -263,27 +258,32 @@ def main():
                     err,
                 )
 
-    probe_retries = max(1, int(CONFIG.get("probe_retries", 3)))
-    max_downloads = max(1, int(CONFIG.get("max_downloads", 4)))
-    if max_downloads != int(CONFIG.get("max_downloads", 4)):
+    probe_retries = min_int(CONFIG.get("probe_retries", 3))
+
+    max_downloads, max_downloads_clamped = clamp_min_int(
+        CONFIG.get("max_downloads", 4)
+    )
+    if max_downloads_clamped:
         logger.warning("max_downloads must be >= 1. Using %d.", max_downloads)
 
     enum_workers_cfg = CONFIG.get("enum_workers")
-    enum_workers = (
-        max(1, int(enum_workers_cfg)) if enum_workers_cfg is not None else max_downloads
-    )
-    if enum_workers_cfg is not None and enum_workers != int(enum_workers_cfg):
+    if enum_workers_cfg is None:
+        enum_workers = max_downloads
+        enum_workers_clamped = False
+    else:
+        enum_workers, enum_workers_clamped = clamp_min_int(enum_workers_cfg)
+    if enum_workers_clamped:
         logger.warning("enum_workers must be >= 1. Using %d.", enum_workers)
 
     download_workers_cfg = CONFIG.get("download_workers")
-    download_workers = (
-        max(1, int(download_workers_cfg))
-        if download_workers_cfg is not None
-        else max_downloads
-    )
-    if download_workers_cfg is not None and download_workers != int(
-        download_workers_cfg
-    ):
+    if download_workers_cfg is None:
+        download_workers = max_downloads
+        download_workers_clamped = False
+    else:
+        download_workers, download_workers_clamped = clamp_min_int(
+            download_workers_cfg
+        )
+    if download_workers_clamped:
         logger.warning("download_workers must be >= 1. Using %d.", download_workers)
 
     try:

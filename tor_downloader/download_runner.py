@@ -14,6 +14,7 @@ import requests
 from stemquests import TorConnectionError, TorInstance
 from tqdm import tqdm
 
+from .config_utils import min_int
 from .file_downloader import FileDownloader
 from .link_discovery import list_directory_entries
 from .mirror_planner import DownloadJob
@@ -24,6 +25,7 @@ from .output_layout import (
     normalize_relative_path,
 )
 from .progress_store import SQLiteProgressStore
+from .url_utils import ensure_trailing_slash
 
 logger = logging.getLogger(__name__)
 _THREAD_LOCAL = threading.local()
@@ -47,10 +49,6 @@ def _get_thread_requests_session(
     )
     _THREAD_LOCAL.requests_session = downloader.requests_session
     return _THREAD_LOCAL.requests_session
-
-
-def _with_trailing_slash(url: str) -> str:
-    return url if url.endswith("/") else f"{url}/"
 
 
 def _dedupe_jobs(jobs: list[DownloadJob]) -> list[DownloadJob]:
@@ -104,10 +102,10 @@ def _build_child_candidates(
 
         suffix = f"{child_relative}/" if is_directory else child_relative
         return [
-            urljoin(_with_trailing_slash(base), suffix) for base in parent_job.bases
+            urljoin(ensure_trailing_slash(base), suffix) for base in parent_job.bases
         ]
     if is_directory:
-        return [_with_trailing_slash(discovered_url)]
+        return [ensure_trailing_slash(discovered_url)]
     return [discovered_url]
 
 
@@ -139,9 +137,9 @@ def _candidate_to_base(
     base_candidates = (
         base_pool.get_bases() if base_pool is not None else list(job.bases)
     )
-    normalized_candidate = _with_trailing_slash(candidate_url)
+    normalized_candidate = ensure_trailing_slash(candidate_url)
     for base in sorted(base_candidates, key=len, reverse=True):
-        normalized_base = _with_trailing_slash(base)
+        normalized_base = ensure_trailing_slash(str(base))
         if normalized_candidate.startswith(normalized_base):
             return normalized_base
     return None
@@ -342,16 +340,11 @@ def run_download_jobs(
     progress_file: str | None = None,
 ) -> dict[str, str]:
     """Run mixed directory/file jobs concurrently and return failed results."""
-    worker_default = max(1, int(max_downloads))
-    enum_limit = (
-        max(1, int(enum_workers)) if enum_workers is not None else worker_default
-    )
+    worker_default = min_int(max_downloads)
+    enum_limit = min_int(enum_workers) if enum_workers is not None else worker_default
     download_limit = (
-        max(1, int(download_workers))
-        if download_workers is not None
-        else worker_default
+        min_int(download_workers) if download_workers is not None else worker_default
     )
-
     in_memory_results: dict[str, str] = {}
     pending_dir_jobs: deque[DownloadJob] = deque()
     pending_file_jobs: deque[DownloadJob] = deque()

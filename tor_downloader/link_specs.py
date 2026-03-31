@@ -7,6 +7,8 @@ import logging
 from dataclasses import dataclass, field
 from typing import List, Literal
 
+from .config_utils import parse_int_field
+
 logger = logging.getLogger(__name__)
 
 
@@ -76,10 +78,10 @@ def load_links_spec(json_path: str) -> LinksSpec:
             )
 
         dynamic_min_bases_raw = payload.get("dynamic_min_bases", 5)
-        try:
-            dynamic_min_bases = int(dynamic_min_bases_raw)
-        except (TypeError, ValueError) as err:
-            raise ValueError("'dynamic_min_bases' must be an integer") from err
+        dynamic_min_bases = parse_int_field(
+            dynamic_min_bases_raw,
+            "dynamic_min_bases",
+        )
         if dynamic_min_bases < 1:
             raise ValueError("'dynamic_min_bases' must be >= 1")
 

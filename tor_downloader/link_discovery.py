@@ -7,26 +7,18 @@ import re
 from collections import deque
 from time import sleep
 from typing import Iterator, Optional, Set, Tuple
-from urllib.parse import quote, unquote, urljoin, urlparse, urlsplit, urlunsplit
+from urllib.parse import urljoin, urlparse
 
 import requests
 from tqdm import tqdm
+
+from .config_utils import min_int
+from .url_utils import normalize_url_for_request
 
 logger = logging.getLogger(__name__)
 
 
 _PLACEHOLDER_TOKEN_RE = re.compile(r"^\s*\$\{[^}]+}\s*$")
-
-
-def _normalize_url_for_request(url: str) -> str:
-    """Encode unsafe URL characters while preserving URL structure."""
-    parsed = urlsplit(url)
-    encoded_path = quote(unquote(parsed.path), safe="/%:@")
-    encoded_query = quote(unquote(parsed.query), safe="=&;%:+,/?%")
-    encoded_fragment = quote(unquote(parsed.fragment), safe="=&;%:+,/?%")
-    return urlunsplit(
-        (parsed.scheme, parsed.netloc, encoded_path, encoded_query, encoded_fragment)
-    )
 
 
 def _is_ignored_link_target(link: str) -> bool:
@@ -54,7 +46,7 @@ def detect_content_type(
     probe_retries: int = 3,
 ) -> str:
     """Best-effort content type probe for slow onion services."""
-    retries = max(1, int(probe_retries))
+    retries = min_int(probe_retries)
     for attempt in range(1, retries + 1):
         try:
             head_resp = session.head(
@@ -103,7 +95,7 @@ def get_url_text_with_retries(
     probe_retries: int = 3,
 ) -> str:
     """Fetch page text with Tor-friendly retry behavior."""
-    retries = max(1, int(probe_retries))
+    retries = min_int(probe_retries)
     for attempt in range(1, retries + 1):
         try:
             with session.get(url, verify=False, timeout=request_timeout) as resp:
@@ -226,7 +218,7 @@ def stream_directory_files(
                 if not _is_same_host_url(dir_url, abs_url):
                     continue
 
-                abs_url = _normalize_url_for_request(abs_url)
+                abs_url = normalize_url_for_request(abs_url)
 
                 if link.endswith("/"):
                     subdir_url = _normalize_dir_url(abs_url)
@@ -286,7 +278,7 @@ def list_directory_entries(
         if not _is_same_host_url(current_dir, abs_url):
             continue
 
-        abs_url = _normalize_url_for_request(abs_url)
+        abs_url = normalize_url_for_request(abs_url)
         if link.endswith("/"):
             subdir_urls.append(_normalize_dir_url(abs_url))
             continue

@@ -7,6 +7,7 @@ from urllib.parse import urljoin, urlparse
 
 from .link_specs import LinksSpec
 from .output_layout import normalize_relative_path, relative_path_from_url
+from .url_utils import ensure_trailing_slash
 
 
 @dataclass
@@ -23,10 +24,6 @@ class DownloadJob:
 def _is_absolute_url(value: str) -> bool:
     parsed = urlparse(value)
     return bool(parsed.scheme and parsed.netloc)
-
-
-def _with_trailing_slash(url: str) -> str:
-    return url if url.endswith("/") else f"{url}/"
 
 
 def plan_download_jobs(spec: LinksSpec) -> list[DownloadJob]:
@@ -75,7 +72,7 @@ def plan_download_jobs(spec: LinksSpec) -> list[DownloadJob]:
         if not is_directory and relative == "":
             relative = f"unnamed_file_{sequence}"
         candidates = [
-            urljoin(_with_trailing_slash(base), relative) for base in spec.bases
+            urljoin(ensure_trailing_slash(base), relative) for base in spec.bases
         ]
         jobs.append(
             DownloadJob(
