@@ -23,6 +23,7 @@ from .output_layout import (
     get_target_dir,
     normalize_relative_path,
 )
+from .progress_store import SQLiteProgressStore
 
 logger = logging.getLogger(__name__)
 _THREAD_LOCAL = threading.local()
@@ -338,8 +339,9 @@ def run_download_jobs(
     enum_workers: int | None = None,
     download_workers: int | None = None,
     base_pool: "DynamicBasePool | None" = None,
+    progress_file: str | None = None,
 ) -> dict[str, str]:
-    """Run mixed directory/file jobs concurrently and return results by relative key."""
+    """Run mixed directory/file jobs concurrently and return failed results."""
     worker_default = max(1, int(max_downloads))
     enum_limit = (
         max(1, int(enum_workers)) if enum_workers is not None else worker_default
@@ -350,7 +352,7 @@ def run_download_jobs(
         else worker_default
     )
 
-    results: dict[str, str] = {}
+    in_memory_results: dict[str, str] = {}
     pending_dir_jobs: deque[DownloadJob] = deque()
     pending_file_jobs: deque[DownloadJob] = deque()
     queued_dir_keys: set[str] = set()
@@ -358,6 +360,7 @@ def run_download_jobs(
     active_dir_keys: set[str] = set()
     active_file_keys: set[str] = set()
     completed_directories: set[str] = set()
+    progress_store: SQLiteProgressStore | None = None
 
     enum_pbar = tqdm(total=0, desc="Enumerating", unit="dir", dynamic_ncols=True)
     download_pbar = tqdm(
@@ -367,7 +370,18 @@ def run_download_jobs(
         dynamic_ncols=True,
     )
 
-    def _enqueue(new_job: DownloadJob) -> None:
+    def _get_existing_result(relative_key: str) -> str | None:
+        if progress_store is not None:
+            return progress_store.get_result(relative_key)
+        return in_memory_results.get(relative_key)
+
+    def _store_result(relative_key: str, value: str) -> None:
+        if progress_store is not None:
+            progress_store.upsert_result(relative_key, value)
+            return
+        in_memory_results[relative_key] = value
+
+    def _enqueue(new_job: DownloadJob, persist: bool = True) -> None:
         key = f"{int(new_job.is_directory)}::{new_job.relative_key}"
 
         if new_job.is_directory:
@@ -377,18 +391,43 @@ def run_download_jobs(
                 return
             pending_dir_jobs.append(new_job)
             queued_dir_keys.add(key)
+            if progress_store is not None and persist:
+                progress_store.enqueue_job(new_job)
             enum_pbar.total += 1
             enum_pbar.refresh()
             return
 
         if key in queued_file_keys or key in active_file_keys:
             return
-        if new_job.relative_key in results:
+        existing_result = _get_existing_result(new_job.relative_key)
+        if existing_result is not None and not str(existing_result).startswith(
+            "failed:"
+        ):
             return
         pending_file_jobs.append(new_job)
         queued_file_keys.add(key)
+        if progress_store is not None and persist:
+            progress_store.enqueue_job(new_job)
         download_pbar.total += 1
         download_pbar.refresh()
+
+    if progress_file is not None:
+        progress_store = SQLiteProgressStore(progress_file)
+        progress_store.reset_active_jobs()
+
+        loaded_completed = progress_store.load_completed_directories()
+        completed_directories.update({f"1::{entry}" for entry in loaded_completed})
+
+        resumed_jobs = progress_store.load_pending_jobs()
+        for resumed_job in resumed_jobs:
+            _enqueue(resumed_job, persist=False)
+
+        logger.info(
+            "Loaded progress store '%s' with %d enumerated link(s) and %d pending job(s).",
+            progress_file,
+            len(completed_directories),
+            len(resumed_jobs),
+        )
 
     for job in _dedupe_jobs(jobs):
         _enqueue(job)
@@ -438,7 +477,11 @@ def run_download_jobs(
                     key = f"{int(job.is_directory)}::{job.relative_key}"
                     queued_dir_keys.discard(key)
                     if key in completed_directories:
+                        if progress_store is not None:
+                            progress_store.mark_job_done(job)
                         continue
+                    if progress_store is not None:
+                        progress_store.mark_job_active(job)
                     future = _submit_enum(job)
                     enum_inflight[future] = job
 
@@ -446,8 +489,15 @@ def run_download_jobs(
                     job = pending_file_jobs.popleft()
                     key = f"{int(job.is_directory)}::{job.relative_key}"
                     queued_file_keys.discard(key)
-                    if job.relative_key in results:
+                    existing_result = _get_existing_result(job.relative_key)
+                    if existing_result is not None and not str(
+                        existing_result
+                    ).startswith("failed:"):
+                        if progress_store is not None:
+                            progress_store.mark_job_done(job)
                         continue
+                    if progress_store is not None:
+                        progress_store.mark_job_active(job)
                     future = _submit_file(job)
                     download_inflight[future] = job
 
@@ -462,28 +512,45 @@ def run_download_jobs(
                         key = f"{int(job.is_directory)}::{job.relative_key}"
                         active_dir_keys.discard(key)
                         completed_directories.add(key)
+                        if progress_store is not None:
+                            progress_store.mark_directory_completed(job.relative_key)
+                            progress_store.mark_job_done(job)
                         enum_pbar.update(1)
                         try:
                             child_jobs, status = future.result()
-                            results[job.relative_key or "/"] = status
+                            _store_result(job.relative_key or "/", status)
                             for child_job in child_jobs:
                                 _enqueue(child_job)
                         except Exception as err:  # pylint: disable=broad-exception-caught
-                            results[job.relative_key or "/"] = (
-                                f"failed:{job.relative_key}:{err}"
+                            _store_result(
+                                job.relative_key or "/",
+                                f"failed:{job.relative_key}:{err}",
                             )
                         continue
 
                     job = download_inflight.pop(future)
                     key = f"{int(job.is_directory)}::{job.relative_key}"
                     active_file_keys.discard(key)
+                    if progress_store is not None:
+                        progress_store.mark_job_done(job)
                     download_pbar.update(1)
                     try:
-                        results[job.relative_key] = future.result()
+                        _store_result(job.relative_key, future.result())
                     except Exception as err:  # pylint: disable=broad-exception-caught
-                        results[job.relative_key] = f"failed:{job.relative_key}:{err}"
+                        _store_result(
+                            job.relative_key, f"failed:{job.relative_key}:{err}"
+                        )
     finally:
         enum_pbar.close()
         download_pbar.close()
+        if progress_store is not None:
+            progress_store.close()
 
-    return results
+    if progress_store is not None and progress_file is not None:
+        resumed_store = SQLiteProgressStore(progress_file)
+        try:
+            return resumed_store.fetch_failed_results()
+        finally:
+            resumed_store.close()
+
+    return in_memory_results

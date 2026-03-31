@@ -82,6 +82,8 @@ During execution, TorDownloader shows two progress bars:
 * Enumerating: directory tasks completed versus discovered.
 * Downloading: file tasks completed versus discovered.
 
+Runtime progress is stored in a SQLite database named `download_progress.sqlite3` in the same folder as `links.json`. This allows interrupted runs to resume without rewriting large JSON snapshots.
+
 ## TODO
 
 * Change all file handling from os to pathlib.

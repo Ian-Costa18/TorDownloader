@@ -194,6 +194,14 @@ def main():
     logger.debug("Using config options: %s", str(CONFIG))
 
     links_file = str(CONFIG.get("links_file", DEFAULT_CONFIG["links_file"]))
+    progress_file = str(Path(links_file).parent / "download_progress.sqlite3")
+    logger.info("Progress store file: %s", progress_file)
+    legacy_progress_file = Path(links_file).parent / "download_progress.json"
+    if legacy_progress_file.exists():
+        logger.info(
+            "Legacy JSON progress file detected at '%s'. It is no longer used.",
+            legacy_progress_file,
+        )
     try:
         links_spec = load_links_spec(links_file)
     except (ValueError, OSError, json.JSONDecodeError) as err:
@@ -296,6 +304,7 @@ def main():
             enum_workers=enum_workers,
             download_workers=download_workers,
             base_pool=shared_dynamic_base_pool,
+            progress_file=progress_file,
         )
     except ConnectionError:
         logger.error("Connection error, restarting script...")
@@ -308,9 +317,13 @@ def main():
         return main()
 
     logger.info("-" * 25)
-    logger.info("All Downloads Finished:")
-    for relative_target, result in files.items():
-        logger.info("\t- %s: %s", relative_target, result)
+    logger.info("All Downloads Finished.")
+    if len(files) == 0:
+        logger.info("No failed downloads recorded.")
+    else:
+        logger.info("Failed downloads (%d):", len(files))
+        for relative_target, result in files.items():
+            logger.info("\t- %s: %s", relative_target, result)
 
 
 if __name__ == "__main__":
